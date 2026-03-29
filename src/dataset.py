@@ -111,19 +111,20 @@ class Dataset:
         self.odo_topic = odo_topic
         self.info_topic = info_topic
 
-        self.images: List[Image] = []
+        self.images: Dict[str, Image] = {}
 
     def export_data(self):
         with open(self.csv_file, 'w', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=Image.headers)
             writer.writeheader()
-            writer.writerows([image.to_dict() for image in self.images])
+            writer.writerows([image.to_dict() for image in self.images.values()])
 
     def load_data_from_csv(self):
         with open(self.csv_file, 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                self.images.append(Image.from_dict(row))
+                image = Image.from_dict(row)
+                self.images[image.filename] = image
 
     def load_data_from_bags(self):
         camera_params = None
@@ -185,13 +186,13 @@ class Dataset:
                 cx=camera_params[2],
                 cy=camera_params[5]
             )
-            self.images.append(image)
+            self.images[image.filename] = image
 
     def data_stats(self):
         min_x, min_y, min_z = 0, 0, 0
         max_x, max_y, max_z = 0, 0, 0
 
-        for image in self.images:
+        for image in self.images.values():
             if image.pose.x > max_x: max_x = image.pose.x
             elif image.pose.x < min_x: min_x = image.pose.x
 

@@ -18,7 +18,7 @@ class Photogrammetry:
             raise ValueError("Image directory does not exist.")
 
         # Camera params
-        img = self.dataset.images[0]
+        img = list(self.dataset.images.values())[0]
         self.camera_params = (img.fx, img.fy, img.cx, img.cy)
 
         # Prepare paths for COLMAP outputs
@@ -54,27 +54,22 @@ class Photogrammetry:
         with pycolmap.Database(str(self.database_path)) as colmap_db:
             position_covariance = np.diag(np.power(pos_std, 2))
 
-            for img in Dataset.images:
-                if colmap_db.exists_image(img.filename):
-                    image = colmap_db.read_image(img.filename)
-                    # Reshape position to a 3x1 column vector as expected by PosePrior
-                    position = np.array([img.pose.x, img.pose.y, img.pose.z]).reshape(3, 1)
+            for image in colmap_db.read_all_images():
+                pose = self.dataset.images[image.name].pose
+                position = np.array([pose.x, pose.y, pose.z]).reshape(3, 1)
 
-                    # Coordinate system: Cartesian (X,Y,Z coords, not Lat/Lon)
-                    colmap_db.write_pose_prior(image.image_id,
-                        pycolmap.PosePrior(
-                            position,
-                            position_covariance,
-                            pycolmap.PosePriorCoordinateSystem(pycolmap.PosePriorCoordinateSystem.CARTESIAN)
-                        )
+                # Coordinate system: Cartesian (X,Y,Z coords, not Lat/Lon)
+                colmap_db.write_pose_prior(image.image_id,
+                    pycolmap.PosePrior(
+                        position,
+                        position_covariance,
+                        pycolmap.PosePriorCoordinateSystem(pycolmap.PosePriorCoordinateSystem.CARTESIAN)
                     )
-                else:
-                    print(f"Warning: Image {img.filename} not found in DB.")
+                )
 
         # Configure Spatial Matching
         spatial_opts = pycolmap.SpatialMatchingOptions()
         spatial_opts.max_distance = max_distance
-        spatial_opts.ignore_z = False 
 
         pycolmap.match_spatial(self.database_path, matching_options=spatial_opts)
 
