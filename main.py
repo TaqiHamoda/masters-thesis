@@ -1,22 +1,26 @@
+import yaml
 from time import perf_counter, sleep
 
 from src.dataset import Dataset
 from src.photogrammetry import Photogrammetry
 
-img_topic = '/girona1000/flir_spinnaker_camera/image_raw/compressed'
-odo_topic = '/girona1000/navigator/odometry'
-info_topic = '/girona1000/flir_spinnaker_camera/camera_info'
-
-perform_dense_reconstruction = False
-
 
 if __name__ == "__main__":
+    # Load settings from the YAML file
+    with open("config.yaml", 'r') as f:
+        cfg = yaml.safe_load(f)
+    
+    # Extract sections for easier access
+    p_cfg = cfg['paths']
+    t_cfg = cfg['topics']
+    algo_cfg = cfg['photogrammetry']
+
     dataset = Dataset(
-        data_path="data/rosbags/",
-        output_path="output/",
-        img_topic=img_topic,
-        odo_topic=odo_topic,
-        info_topic=info_topic
+        data_path=p_cfg['data_path'],
+        output_path=p_cfg['output_path'],
+        img_topic=t_cfg['img_topic'],
+        odo_topic=t_cfg['odo_topic'],
+        info_topic=t_cfg['info_topic']
     )
 
     if dataset.csv_file.exists():
@@ -27,66 +31,44 @@ if __name__ == "__main__":
         dataset.data_stats()
         dataset.inspect_bags()
 
-    photogrammetry = Photogrammetry(dataset, output_path="output/")
+    photogrammetry = Photogrammetry(dataset, output_path=p_cfg['output_path'])
 
     if not photogrammetry.has_cuda():
-        print("CUDA not available. Consider installing COLMAP with CUDA support for faster processing.")
+        print("CUDA not available. Consider installing COLMAP with CUDA support.")
         sleep(5)
 
-    if photogrammetry.database_path.exists():
-        print("Database already exists. Skipping feature extraction and matching.")
-    else:
-        print("Extracting and matching features")
-
+    # Feature Extraction
+    if not photogrammetry.database_path.exists():
+        print("Extracting and matching features...")
         start_time = perf_counter()
-        photogrammetry.extract_and_match_features(
-            contrast_threshold=0.002,
-            pos_std=(2.0, 2.0, 0.1),
-            max_distance=5.0
-        )
-        end_time = perf_counter()
+        photogrammetry.extract_and_match_features(**algo_cfg['features'])
+        print(f"Features completed in {perf_counter() - start_time:.2f}s")
 
-        print(f"Feature extraction and matching completed in {end_time - start_time:.2f} seconds.")
-
-    if photogrammetry.sparse_path.exists():
-        print("Sparse reconstruction already exists. Skipping...")
-    else:
-        print("Performing sparse reconstruction")
-
+    # Sparse Reconstruction
+    if not photogrammetry.sparse_path.exists():
+        print("Performing sparse reconstruction...")
         start_time = perf_counter()
-        photogrammetry.bundle_adjustment()
-        photogrammetry.prune_poses()
-        end_time = perf_counter()
+        photogrammetry.sparse_reconstruction()
+        photogrammetry.prune_poses(**algo_cfg['pruning'])
+        print(f"Sparse completed in {perf_counter() - start_time:.2f}s")
 
-        print(f"Sparse reconstruction completed in {end_time - start_time:.2f} seconds.")
-
-    if not perform_dense_reconstruction:
+    # Exit if dense is not requested
+    if not cfg['flags']['perform_dense_reconstruction']:
+        print("Dense reconstruction disabled in config. Exiting.")
         exit()
 
-    if photogrammetry.mvs_path.exists():
-        print("Stereo matching already exists. Skipping...")
-    else:
-        print("Performing stereo matching")
-
+    # Stereo Matching
+    if not photogrammetry.mvs_path.exists():
+        print(f"Performing stereo matching...")
         start_time = perf_counter()
         photogrammetry.stereo_matching()
-        end_time = perf_counter()
+        print(f"Stereo matching completed in {perf_counter() - start_time:.2f}s")
 
-        print(f"Stereo matching completed in {end_time - start_time:.2f} seconds.")
-
-    if photogrammetry.dense_ply.exists():
-        print("Dense reconstruction already exists. Skipping...")
-    else:
-        print("Performing dense reconstruction")
-
+    # Dense Reconstruction
+    if not photogrammetry.dense_ply.exists():
+        print("Performing dense reconstruction...")
         start_time = perf_counter()
-        photogrammetry.dense_reconstruction(
-            max_image_size=2000,
-            check_num_images=10,
-            cache_size=32
-        )
-        end_time = perf_counter()
-
-        print(f"Dense reconstruction completed in {end_time - start_time:.2f} seconds.")
+        photogrammetry.dense_reconstruction(**algo_cfg['dense'])
+        print(f"Dense completed in {perf_counter() - start_time:.2f}s")
 
     photogrammetry.create_mesh()

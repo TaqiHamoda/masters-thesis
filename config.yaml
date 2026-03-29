@@ -1,0 +1,30 @@
+# General File Paths
+paths:
+  data_path: "data/rosbags/"
+  output_path: "output/"
+
+# ROS Topics
+topics:
+  img_topic: "/girona1000/flir_spinnaker_camera/image_raw/compressed"
+  odo_topic: "/girona1000/navigator/odometry"
+  info_topic: "/girona1000/flir_spinnaker_camera/camera_info"
+
+# Processing Flags
+flags:
+  perform_dense_reconstruction: false
+
+# Photogrammetry Hyperparameters
+photogrammetry:
+  features:
+    contrast_threshold: 0.002
+    pos_std: [2.0, 2.0, 0.1]
+    max_distance: 5.0
+
+  pruning:
+    max_reproj_error: 1.0
+    min_num_points: 20
+
+  dense:
+    max_image_size: 2000
+    check_num_images: 10
+    cache_size: 32

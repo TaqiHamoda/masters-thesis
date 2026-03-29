@@ -78,9 +78,9 @@ class Photogrammetry:
 
         pycolmap.match_spatial(self.database_path, matching_options=spatial_opts)
 
-    def bundle_adjustment(self):
+    def sparse_reconstruction(self):
         if not self.database_path.exists():
-            raise ValueError("Database not found. Please run feature extraction and matching before bundle adjustment.")
+            raise ValueError("Database not found. Please run feature extraction and matching before sparse reconstruction.")
 
         self.sparse_path.mkdir(exist_ok=True)
 
@@ -152,4 +152,3 @@ class Photogrammetry:
     @staticmethod
     def has_cuda() -> bool:
         return pycolmap.has_cuda
-
