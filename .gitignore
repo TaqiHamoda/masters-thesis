@@ -1,3 +1,9 @@
+# Project Specific Configurations
+data/
+temp/
+tmp/
+output/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
