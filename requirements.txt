@@ -1,6 +1,6 @@
 numpy
 opencv-python
-pycolmap>=3.11.0,<3.12.0
+pycolmap==4.0.2
 rosbags
 tabulate
 tqdm

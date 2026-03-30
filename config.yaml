@@ -17,6 +17,7 @@ flags:
 photogrammetry:
   features:
     contrast_threshold: 0.002
+    max_num_features: 8192
     pos_std: [2.0, 2.0, 0.1]
     max_distance: 5.0
 

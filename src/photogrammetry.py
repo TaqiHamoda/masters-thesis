@@ -33,6 +33,7 @@ class Photogrammetry:
 
     def extract_and_match_features(self,
         contrast_threshold: float = 0.002,
+        max_num_features: int = 8192,
         pos_std: Tuple[float, float, float] = (2.0, 2.0, 0.1),
         max_distance: float = 5.0
     ):
@@ -40,38 +41,44 @@ class Photogrammetry:
         reader_options.camera_model = "PINHOLE"
         reader_options.camera_params = ",".join(map(str, self.camera_params))
 
-        extraction_options = pycolmap.SiftExtractionOptions()
-        extraction_options.peak_threshold = contrast_threshold    # Default is 0.006666666666666667
+        extraction_options = pycolmap.FeatureExtractionOptions()
+        extraction_options.sift.peak_threshold = contrast_threshold    # Default is 0.006666666666666667
+        extraction_options.sift.max_num_features = max_num_features    # Default is 8192
 
         pycolmap.extract_features(
             database_path=self.database_path,
             image_path=self.images_dir,
             camera_mode=pycolmap.CameraMode.SINGLE,
             reader_options=reader_options,
-            sift_options=extraction_options
+            extraction_options=extraction_options 
         )
 
-        with pycolmap.Database(str(self.database_path)) as colmap_db:
+        # Source: https://github.com/colmap/colmap/issues/2976#issuecomment-3930305589
+        with pycolmap.Database.open(self.database_path) as colmap_db:
             position_covariance = np.diag(np.power(pos_std, 2))
 
             for image in colmap_db.read_all_images():
                 pose = self.dataset.images[image.name].pose
-                position = np.array([pose.x, pose.y, pose.z]).reshape(3, 1)
+                position = np.array((pose.x, pose.y, pose.z)).reshape(3, 1)
 
                 # Coordinate system: Cartesian (X,Y,Z coords, not Lat/Lon)
-                colmap_db.write_pose_prior(image.image_id,
-                    pycolmap.PosePrior(
-                        position,
-                        position_covariance,
-                        pycolmap.PosePriorCoordinateSystem(pycolmap.PosePriorCoordinateSystem.CARTESIAN)
-                    )
+                prior = pycolmap.PosePrior(
+                    corr_data_id=image.data_id,  # Link the prior to the specific image's data identifier
+                    position=position,
+                    position_covariance=position_covariance,
+                    coordinate_system=pycolmap.PosePriorCoordinateSystem.CARTESIAN
                 )
+                print(prior)
+                colmap_db.write_pose_prior(prior)
 
         # Configure Spatial Matching
-        spatial_opts = pycolmap.SpatialMatchingOptions()
+        spatial_opts = pycolmap.SpatialPairingOptions()
         spatial_opts.max_distance = max_distance
 
-        pycolmap.match_spatial(self.database_path, matching_options=spatial_opts)
+        pycolmap.match_spatial(
+            self.database_path, 
+            pairing_options=spatial_opts
+        )
 
     def sparse_reconstruction(self, ba_global_ratio: float = 2.0):
         """Incrementally registers images, Triangulates 3D points, and Performs local and global bundle adjustment"""
@@ -83,6 +90,10 @@ class Photogrammetry:
         options = pycolmap.IncrementalPipelineOptions()
         options.ba_global_images_ratio = ba_global_ratio
         options.ba_global_points_ratio = ba_global_ratio
+
+        options.ba_use_gpu = self.has_cuda()
+        options.use_prior_position = True
+        options.ba_refine_focal_length = False
 
         maps = pycolmap.incremental_mapping(
             database_path=self.database_path,
