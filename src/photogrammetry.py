@@ -62,21 +62,21 @@ class Photogrammetry:
                 position = np.array((pose.x, pose.y, pose.z)).reshape(3, 1)
 
                 # Coordinate system: Cartesian (X,Y,Z coords, not Lat/Lon)
-                prior = pycolmap.PosePrior(
-                    corr_data_id=image.data_id,  # Link the prior to the specific image's data identifier
-                    position=position,
-                    position_covariance=position_covariance,
-                    coordinate_system=pycolmap.PosePriorCoordinateSystem.CARTESIAN
+                colmap_db.write_pose_prior(
+                    pycolmap.PosePrior(
+                        corr_data_id=image.data_id,  # Link the prior to the specific image's data identifier
+                        position=position,
+                        position_covariance=position_covariance,
+                        coordinate_system=pycolmap.PosePriorCoordinateSystem.CARTESIAN
+                    )
                 )
-                print(prior)
-                colmap_db.write_pose_prior(prior)
 
         # Configure Spatial Matching
         spatial_opts = pycolmap.SpatialPairingOptions()
         spatial_opts.max_distance = max_distance
 
         pycolmap.match_spatial(
-            self.database_path, 
+            self.database_path,
             pairing_options=spatial_opts
         )
 
@@ -88,7 +88,7 @@ class Photogrammetry:
         self.sparse_path.mkdir(exist_ok=True)
 
         options = pycolmap.IncrementalPipelineOptions()
-        options.ba_global_images_ratio = ba_global_ratio
+        options.ba_global_frames_ratio = ba_global_ratio
         options.ba_global_points_ratio = ba_global_ratio
 
         options.ba_use_gpu = self.has_cuda()
