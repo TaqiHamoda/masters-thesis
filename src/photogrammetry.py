@@ -91,6 +91,9 @@ class Photogrammetry:
         options.ba_global_frames_ratio = ba_global_ratio
         options.ba_global_points_ratio = ba_global_ratio
 
+        options.ba_global_frames_freq = 5000
+        options.ba_global_points_freq = 25_000_000
+
         options.ba_use_gpu = self.has_cuda()
         options.use_prior_position = True
         options.ba_refine_focal_length = False
