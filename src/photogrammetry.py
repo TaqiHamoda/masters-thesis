@@ -34,7 +34,8 @@ class Photogrammetry:
     def extract_and_match_features(self,
         contrast_threshold: float = 0.002,
         max_num_features: int = 8192,
-        pos_std: Tuple[float, float, float] = (2.0, 2.0, 0.1),
+        pos_trans: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        pos_std: Tuple[float, float, float] = (2.0, 2.0, 2.0),
         max_distance: float = 5.0
     ):
         reader_options = pycolmap.ImageReaderOptions()
@@ -59,7 +60,9 @@ class Photogrammetry:
 
             for image in colmap_db.read_all_images():
                 pose = self.dataset.images[image.name].pose
-                position = np.array((pose.x, pose.y, pose.z)).reshape(3, 1)
+                position = (
+                    np.array((pose.x, pose.y, pose.z)) + np.array(pos_trans)
+                ).reshape(3, 1)
 
                 # Coordinate system: Cartesian (X,Y,Z coords, not Lat/Lon)
                 colmap_db.write_pose_prior(
@@ -80,7 +83,13 @@ class Photogrammetry:
             pairing_options=spatial_opts
         )
 
-    def sparse_reconstruction(self, ba_global_ratio: float = 2.0):
+    def sparse_reconstruction(self,
+        ba_global_ratio: float = 1.1,
+        ba_global_frames_freq: int = 500,
+        ba_global_points_freq: int = 250000,
+        ba_global_max_num_iterations: int = 50,
+        ba_global_max_refinements: int = 5,
+    ):
         """Incrementally registers images, Triangulates 3D points, and Performs local and global bundle adjustment"""
         if not self.database_path.exists():
             raise ValueError("Database not found. Please run feature extraction and matching before sparse reconstruction.")
@@ -90,13 +99,13 @@ class Photogrammetry:
         options = pycolmap.IncrementalPipelineOptions()
         options.ba_global_frames_ratio = ba_global_ratio
         options.ba_global_points_ratio = ba_global_ratio
-
-        options.ba_global_frames_freq = 5000
-        options.ba_global_points_freq = 25_000_000
+        options.ba_global_frames_freq = ba_global_frames_freq
+        options.ba_global_points_freq = ba_global_points_freq
+        options.ba_global_max_num_iterations = ba_global_max_num_iterations
+        options.ba_global_max_refinements = ba_global_max_refinements
 
         options.ba_use_gpu = self.has_cuda()
         options.use_prior_position = True
-        options.ba_refine_focal_length = False
 
         maps = pycolmap.incremental_mapping(
             database_path=self.database_path,

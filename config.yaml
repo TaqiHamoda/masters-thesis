@@ -8,6 +8,8 @@ topics:
   img_topic: "/girona1000/flir_spinnaker_camera/image_raw/compressed"
   odo_topic: "/girona1000/navigator/odometry"
   info_topic: "/girona1000/flir_spinnaker_camera/camera_info"
+  sonar_topic: "/girona1000/marinesonic_scoutmkii_sidescan/snr2_data"
+  nav_topic: "/girona1000/navigator/navigation"
 
 # Processing Flags
 flags:
@@ -16,13 +18,19 @@ flags:
 # Photogrammetry Hyperparameters
 photogrammetry:
   features:
-    contrast_threshold: 0.002
-    max_num_features: 8192
-    pos_std: [2.0, 2.0, 0.1]
-    max_distance: 5.0
+    contrast_threshold: 0.002        # SIFT contrast threshold for feature detection (Default 0.0067)
+    max_num_features: 8192           # Maximum number of SIFT features to detect (Default 8192)
+    pos_trans: [0.0, -0.58, 0.5796]  # Translation from AUV center to camera center in meters
+    pos_std: [2.0, 2.0, 2.0]         # Standard deviation (weight) of the position prior
+    max_distance: 10.0               # Maximum distance in meters for matching features between images
 
+  # The following config assumes the priors are reliable. Use default values if not sure.
   sparse:
-    ba_global_ratio: 2.0
+    ba_global_ratio: 20.0             # The relative growth rates after which to perform global bundle adjustment (Default: 1.1)
+    ba_global_frames_freq: 10000      # The frame growth rate after which to perform global bundle adjustment (Default: 500)
+    ba_global_points_freq: 50000000   # The pointcloud growth rates after which to perform global bundle adjustment (Default: 250000)
+    ba_global_max_num_iterations: 20  # The maximum number of global bundle adjustment iterations (Default: 50)
+    ba_global_max_refinements: 1      # The thresholds for iterative bundle adjustment refinements (Default: 5)
 
   pruning:
     max_reproj_error: 1.0

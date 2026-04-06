@@ -20,17 +20,19 @@ if __name__ == "__main__":
         output_path=p_cfg['output_path'],
         img_topic=t_cfg['img_topic'],
         odo_topic=t_cfg['odo_topic'],
-        info_topic=t_cfg['info_topic']
+        info_topic=t_cfg['info_topic'],
+        sonar_topic=t_cfg['sonar_topic'],
+        nav_topic=t_cfg['nav_topic']
     )
 
     print("Loading dataset...")
-    if dataset.csv_file.exists():
+    if dataset.exists():
         dataset.load_data_from_csv()
     else:
         dataset.load_data_from_bags()
         dataset.export_data()
-        dataset.data_stats()
         dataset.inspect_bags()
+        dataset.data_stats()
 
     photogrammetry = Photogrammetry(dataset, output_path=p_cfg['output_path'])
 
