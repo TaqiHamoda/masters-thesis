@@ -330,6 +330,7 @@ class Dataset:
         for img_ts in images_metadata:
             idx = (np.abs(odo_timestamps - img_ts)).argmin()
             matched_pose = odometry_data[idx][1]
+            matched_pose.timestamp = img_ts  # Update timestamp to match image
 
             image = Image(
                 pose=matched_pose,
