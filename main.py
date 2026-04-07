@@ -25,10 +25,11 @@ if __name__ == "__main__":
         nav_topic=t_cfg['nav_topic']
     )
 
-    print("Loading dataset...")
     if dataset.exists():
+        print("Loading processed dataset...")
         dataset.load_data_from_csv()
     else:
+        print("Processing raw data from bags...")
         dataset.load_data_from_bags()
         dataset.export_data()
         dataset.inspect_bags()

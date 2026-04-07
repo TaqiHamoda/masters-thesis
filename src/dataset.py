@@ -37,7 +37,7 @@ class Pose:
 
 
 class Image:
-    headers = ("image_name", "timestamp", "x", "y", "z", "qw", "qx", "qy", "qz", "fx", "fy", "cx", "cy")
+    headers = ("timestamp", "x", "y", "z", "qw", "qx", "qy", "qz", "fx", "fy", "cx", "cy")
 
     def __init__(self,
         pose: Pose,
@@ -59,19 +59,19 @@ class Image:
     def from_dict(data: Dict[str, Any]) -> Self:
         return Image(
             pose=Pose(
-                data["timestamp"],
-                data["x"],
-                data["y"],
-                data["z"],
-                data["qw"],
-                data["qx"],
-                data["qy"],
-                data["qz"]
+                int(data["timestamp"]),
+                float(data["x"]),
+                float(data["y"]),
+                float(data["z"]),
+                float(data["qw"]),
+                float(data["qx"]),
+                float(data["qy"]),
+                float(data["qz"])
             ),
-            fx=data["fx"],
-            fy=data["fy"],
-            cx=data["cx"],
-            cy=data["cy"]
+            fx=float(data["fx"]),
+            fy=float(data["fy"]),
+            cx=float(data["cx"]),
+            cy=float(data["cy"])
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -115,21 +115,20 @@ class SideScanSonar:
         self.pitch = pitch
         self.yaw = yaw
 
-        self.filename = f"{self.timestamp}.npz"
         self.bin_size = self.slant_range / self.num_samples
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> Self:
         return SideScanSonar(
-            timestamp=data["timestamp"],
-            num_samples=data["num_samples"],
-            slant_range=data["slant_range"],
-            east=data["east"],
-            north=data["north"],
-            altitude=data["altitude"],
-            roll=data["roll"],
-            pitch=data["pitch"],
-            yaw=data["yaw"]
+            int(data["timestamp"]),
+            int(data["num_samples"]),
+            float(data["slant_range"]),
+            float(data["east"]),
+            float(data["north"]),
+            float(data["altitude"]),
+            float(data["roll"]),
+            float(data["pitch"]),
+            float(data["yaw"])
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -186,10 +185,9 @@ class Dataset:
     def exists(self) -> bool:
         return self.cameras_csv.exists() and\
             self.sonar_csv.exists() and\
-            self.image_dir.exists() and\
             self.sonar_file.exists() and\
-            self.image_dir.is_dir() and\
-            len(self.images) > 0
+            self.image_dir.exists() and\
+            self.image_dir.is_dir()
 
     def _recurse_dir(self, path: Path) -> List[Path]:
         files = []
@@ -229,7 +227,7 @@ class Dataset:
             reader = csv.DictReader(f)
             for row in reader:
                 image = Image.from_dict(row)
-                self.images[image.filename] = image
+                self.images[image.pose.timestamp] = image
 
         with open(self.sonar_csv, 'r') as f:
             reader = csv.DictReader(f)
@@ -340,7 +338,7 @@ class Dataset:
                 cx=camera_params[2],
                 cy=camera_params[5]
             )
-            self.images[image.filename] = image
+            self.images[image.pose.timestamp] = image
 
         nav_timestamps = np.array([n[0] for n in nav_data])
         for sonar_ts, num_samples, slant_range in sonar_data:
@@ -358,7 +356,7 @@ class Dataset:
                 pitch=matched_nav[5],
                 yaw=matched_nav[6]
             )
-            self.sonar[sonar.filename] = sonar
+            self.sonar[sonar.timestamp] = sonar
 
     def data_stats(self):
         min_x, min_y, min_z, min_alt = np.inf, np.inf, np.inf, np.inf

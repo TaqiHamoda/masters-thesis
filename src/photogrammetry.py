@@ -59,7 +59,8 @@ class Photogrammetry:
             position_covariance = np.diag(np.power(pos_std, 2))
 
             for image in colmap_db.read_all_images():
-                pose = self.dataset.images[image.name].pose
+                ts = int(image.name.replace(".jpg", ''))
+                pose = self.dataset.images[ts].pose
                 position = (
                     np.array((pose.x, pose.y, pose.z)) + np.array(pos_trans)
                 ).reshape(3, 1)
