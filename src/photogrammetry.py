@@ -118,34 +118,6 @@ class Photogrammetry:
         maps[0].write(self.sparse_path)
         maps[0].write_text(self.sparse_path)
 
-    def prune_poses(self,
-        max_reproj_error: float = 1.0,
-        min_num_points: int = 20
-    ):
-        if not self.sparse_path.exists():
-            raise ValueError("Sparse reconstruction not found. Please run bundle adjustment before pruning.")
-
-        self.sparse_refined_path.mkdir(exist_ok=True)
-
-        reconstruction = pycolmap.Reconstruction()
-        reconstruction.read(self.sparse_path)
-
-        for point3D_id, point3D in reconstruction.points3D.items():
-            if point3D.error > max_reproj_error:
-                reconstruction.delete_point3D(point3D_id)
-
-        to_remove = []
-        for img_id in reconstruction.reg_image_ids():
-            img = reconstruction.images[img_id]
-            if img.num_points3D < min_num_points:
-                to_remove.append(img_id)
-
-        for img_id in to_remove:
-            reconstruction.deregister_image(img_id)
-
-        reconstruction.write(self.sparse_refined_path)
-        reconstruction.write_text(self.sparse_refined_path)
-
     def stereo_matching(self):
         if not self.sparse_path.exists():
             raise ValueError("Sparse reconstruction not found. Please run bundle adjustment before pruning.")
@@ -157,17 +129,17 @@ class Photogrammetry:
 
     def dense_reconstruction(self,
         max_image_size: int = 2000,
-        check_num_images: int = 10,
-        cache_size: int = 32
+        check_num_images: int = 50,
+        cache_size: float = 32.0
     ):
         if not self.mvs_path.exists():
             raise ValueError("MVS outputs not found. Please run stereo matching before dense reconstruction.")
 
         fusion_options = pycolmap.StereoFusionOptions()
-        fusion_options.max_image_size = max_image_size      # Maximum image size in either dimension
-        fusion_options.check_num_images = check_num_images  # Number of overlapping images to transitively check for fusing points (default: 50)
-        fusion_options.use_cache = True                     # Enables disk caching to save RAM
-        fusion_options.cache_size = cache_size              # Cache size in gigabytes for fusion (default: 32.0)
+        fusion_options.max_image_size = max_image_size
+        fusion_options.check_num_images = check_num_images
+        fusion_options.use_cache = True
+        fusion_options.cache_size = cache_size
 
         pycolmap.stereo_fusion(self.dense_ply, self.mvs_path, options=fusion_options)
 

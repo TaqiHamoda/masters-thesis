@@ -18,25 +18,20 @@ flags:
 # Photogrammetry Hyperparameters
 photogrammetry:
   features:
-    contrast_threshold: 0.002        # SIFT contrast threshold for feature detection (Default 0.0067)
-    max_num_features: 8192           # Maximum number of SIFT features to detect (Default 8192)
-    pos_trans: [0.0, -0.58, 0.5796]  # Translation from AUV center to camera center in meters
-    pos_std: [2.0, 2.0, 2.0]         # Standard deviation (weight) of the position prior
-    max_distance: 10.0               # Maximum distance in meters for matching features between images
+    contrast_threshold: 0.002         # SIFT contrast threshold for feature detection (Default 0.0067)
+    max_num_features: 8192            # Maximum number of SIFT features to detect (Default 8192)
+    pos_trans: [0.0, -0.58, 0.5796]   # Translation from AUV center to camera center in meters
+    pos_std: [2.0, 2.0, 2.0]          # Standard deviation (weight) of the position prior
+    max_distance: 10.0                # Maximum distance in meters for matching features between images
 
-  # The following config assumes the priors are reliable. Use default values if not sure.
   sparse:
-    ba_global_ratio: 20.0             # The relative growth rates after which to perform global bundle adjustment (Default: 1.1)
-    ba_global_frames_freq: 10000      # The frame growth rate after which to perform global bundle adjustment (Default: 500)
-    ba_global_points_freq: 50000000   # The pointcloud growth rates after which to perform global bundle adjustment (Default: 250000)
-    ba_global_max_num_iterations: 20  # The maximum number of global bundle adjustment iterations (Default: 50)
-    ba_global_max_refinements: 1      # The thresholds for iterative bundle adjustment refinements (Default: 5)
-
-  pruning:
-    max_reproj_error: 1.0
-    min_num_points: 20
+    ba_global_ratio: 1.1              # The relative growth rates after which to perform global bundle adjustment (Default: 1.1)
+    ba_global_frames_freq: 500        # The frame growth rate after which to perform global bundle adjustment (Default: 500)
+    ba_global_points_freq: 250000     # The pointcloud growth rates after which to perform global bundle adjustment (Default: 250000)
+    ba_global_max_num_iterations: 50  # The maximum number of global bundle adjustment iterations (Default: 50)
+    ba_global_max_refinements: 5      # The thresholds for iterative bundle adjustment refinements (Default: 5)
 
   dense:
-    max_image_size: 2000
-    check_num_images: 10
-    cache_size: 32
+    max_image_size: 2000              # Maximum image size in either dimension for dense reconstruction (Default: -1)
+    check_num_images: 50              # Number of overlapping images to transitively check for fusing points (Default: 50)
+    cache_size: 32.0                  # Cache size in gigabytes for fusion (Default: 32.0)
