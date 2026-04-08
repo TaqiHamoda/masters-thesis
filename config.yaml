@@ -21,7 +21,7 @@ photogrammetry:
     contrast_threshold: 0.002         # SIFT contrast threshold for feature detection (Default 0.0067)
     max_num_features: 8192            # Maximum number of SIFT features to detect (Default 8192)
     pos_trans: [0.0, -0.58, 0.5796]   # Translation from AUV center to camera center in meters
-    pos_std: [2.0, 2.0, 2.0]          # Standard deviation (weight) of the position prior
+    pos_std: [0.1, 0.1, 0.1]          # Standard deviation (weight) in meters of the position prior
     max_distance: 10.0                # Maximum distance in meters for matching features between images
 
   sparse:

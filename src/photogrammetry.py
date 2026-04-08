@@ -17,7 +17,7 @@ class Photogrammetry:
         if not self.images_dir.exists():
             raise ValueError("Image directory does not exist.")
 
-        # Camera params (https://deepwiki.com/colmap/pycolmap/4.1-camera-models#complete-example)
+        # Camera params (https://forums.unrealengine.com/t/colmap-text-export-pinhole-option/2657130/10)
         img = list(self.dataset.images.values())[0]
         self.camera_params = (img.fx, img.fy, img.cx, img.cy, img.k1, img.k2, img.p1, img.p2, img.k3, img.k4, img.k5, img.k6)
 
