@@ -26,9 +26,8 @@ class Photogrammetry:
 
         self.database_path = self.output_dir / "database.db"
         self.sparse_path = self.output_dir / "sparse"
-        self.sparse_refined_path = self.output_dir / "sparse_pruned"
         self.stereo_path = self.output_dir / "stereo"
-        self.fused_ply = self.stereo_path / "fused.ply"
+        self.fused_ply = self.output_dir / "fused.ply"
         self.mesh_ply = self.output_dir / "mesh.ply"
 
     def extract_and_match_features(self,
@@ -119,10 +118,8 @@ class Photogrammetry:
         if not self.sparse_path.exists():
             raise ValueError("Sparse reconstruction not found. Please run bundle adjustment before pruning.")
 
-        self.stereo_path.mkdir(exist_ok=True)
-
-        pycolmap.undistort_images(self.stereo_path, self.sparse_path, self.images_dir)
-        pycolmap.patch_match_stereo(self.stereo_path)
+        pycolmap.undistort_images(self.output_dir, self.sparse_path, self.images_dir)
+        pycolmap.patch_match_stereo(self.output_dir)
 
     def dense_reconstruction(self,
         max_image_size: int = 2000,
@@ -138,7 +135,7 @@ class Photogrammetry:
         fusion_options.use_cache = True
         fusion_options.cache_size = cache_size
 
-        pycolmap.stereo_fusion(self.fused_ply, self.stereo_path, options=fusion_options, output_type="ply")
+        pycolmap.stereo_fusion(self.fused_ply, self.output_dir, options=fusion_options, output_type="ply")
 
     def create_mesh(self):
         if not self.fused_ply.exists():
