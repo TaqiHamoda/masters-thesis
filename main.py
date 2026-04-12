@@ -24,11 +24,6 @@ def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
         photogrammetry.sparse_reconstruction(**cfg['sparse'])
         print(f"Sparse completed in {perf_counter() - start_time:.2f}s")
 
-    # Exit if dense is not requested
-    if not cfg['flags']['perform_dense_reconstruction']:
-        print("Dense reconstruction disabled in config. Exiting.")
-        exit()
-
     # Stereo Matching
     if not photogrammetry.mvs_path.exists():
         print(f"Performing stereo matching...")
