@@ -25,7 +25,7 @@ def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
         print(f"Sparse completed in {perf_counter() - start_time:.2f}s")
 
     # Stereo Matching
-    if not photogrammetry.mvs_path.exists():
+    if not photogrammetry.stereo_path.exists():
         print(f"Performing stereo matching...")
         start_time = perf_counter()
         photogrammetry.stereo_matching()
