@@ -36,3 +36,7 @@ photogrammetry:
     max_image_size: 2000              # Maximum image size in either dimension for dense reconstruction (Default: -1)
     check_num_images: 50              # Number of overlapping images to transitively check for fusing points (Default: 50)
     cache_size: 32.0                  # Cache size in gigabytes for fusion (Default: 32.0)
+
+  mesh:
+    mesh_depth: 10                   # Depth parameter for Poisson surface resolution (Default: 8)
+    tex_size: 8192                   # Texture size for UV mapping (Default: 1024)

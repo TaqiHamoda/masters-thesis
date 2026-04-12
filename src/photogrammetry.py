@@ -1,7 +1,8 @@
-import pycolmap
+import pycolmap, pymeshlab
 import numpy as np
 from pathlib import Path
 from typing import Tuple
+import subprocess
 
 from .dataset import Dataset
 
@@ -29,7 +30,9 @@ class Photogrammetry:
         self.sparse_path = self.workspace_path / "sparse"
         self.stereo_path = self.workspace_path / "stereo"
         self.fused_ply = self.workspace_path / "fused.ply"
-        self.mesh_ply = self.output_dir / "mesh.ply"
+
+        self.mesh_path = self.output_dir / "mesh"
+        self.mesh_ply = self.mesh_path / "mesh.ply"
 
     def extract_and_match_features(self,
         contrast_threshold: float = 0.002,
@@ -138,11 +141,38 @@ class Photogrammetry:
 
         pycolmap.stereo_fusion(self.fused_ply, self.workspace_path, options=fusion_options, output_type="ply")
 
-    def create_mesh(self):
+    def create_mesh(self,
+        mesh_depth: int = 8,
+        tex_size: int = 1024
+    ):
         if not self.fused_ply.exists():
             raise ValueError("Dense reconstruction outputs not found. Please run dense reconstruction before meshing.")
 
-        pycolmap.poisson_meshing(self.fused_ply, self.mesh_ply)
+        self.mesh_path.mkdir(exist_ok=True)
+
+        ms = pymeshlab.MeshSet()
+        ms.load_new_mesh(str(self.fused_ply))
+
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#generate_surface_reconstruction_screened_poisson
+        ms.apply_filter(
+            'generate_surface_reconstruction_screened_poisson',
+            depth=mesh_depth
+        )
+
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texcoord_parametrization_triangle_trivial_per_wedge
+        ms.apply_filter(
+            'compute_texcoord_parametrization_triangle_trivial_per_wedge',
+            textdim=tex_size
+        )
+
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texmap_from_color
+        ms.apply_filter(
+            'compute_texmap_from_color',
+            textname='texture.png',
+            textw=tex_size, texth=tex_size
+        )
+
+        ms.save_current_mesh(str(self.mesh_ply))
 
     @staticmethod
     def has_cuda() -> bool:
