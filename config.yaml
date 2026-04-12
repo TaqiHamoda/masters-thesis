@@ -38,5 +38,5 @@ photogrammetry:
     cache_size: 32.0                  # Cache size in gigabytes for fusion (Default: 32.0)
 
   mesh:
-    mesh_depth: 10                   # Depth parameter for Poisson surface resolution (Default: 8)
-    tex_size: 8192                   # Texture size for UV mapping (Default: 1024)
+    mesh_depth: 12                   # Depth parameter for Poisson surface resolution (Default: 8)
+    tex_size: 32768                  # Texture size for UV mapping (Default: 1024)
