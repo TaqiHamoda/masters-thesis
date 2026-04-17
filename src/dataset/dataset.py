@@ -53,8 +53,8 @@ class Dataset:
         self.images: Dict[int, Image] = {}
         self.sonar: Dict[int, SideScanSonar] = {}
 
-        self.camera_trans = camera_trans
-        self.sonar_trans = sonar_trans
+        self.camera_trans = np.array(camera_trans)
+        self.sonar_trans = np.array(sonar_trans)
 
     def exists(self) -> bool:
         return self.cameras_csv.exists() and\

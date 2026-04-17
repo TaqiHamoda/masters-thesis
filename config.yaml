@@ -1,6 +1,6 @@
 # General File Paths
 paths:
-  data_path: "data/rosbags/"
+  data_path: "data/"
   output_path: "output/"
 
 # ROS Topics
@@ -12,10 +12,9 @@ topics:
   nav_topic: "/girona1000/navigator/navigation"
 
 extrinsics:
-  sonar:  [0.0, 0.47, 0.0]      # Translation from base to sonar in meters (x, y, z)
-  camera: [0.0, -0.58, 0.5796]  # Translation from base to camera in meters (x, y, z)
+  sonar:  [0.0, 0.47, 0.0]            # Translation from base to sonar in meters (x, y, z)
+  camera: [0.0, -0.58, 0.5796]        # Translation from base to camera in meters (x, y, z)
 
-# Photogrammetry Hyperparameters
 photogrammetry:
   enabled: false                      # Whether to run photogrammetry reconstruction (Default: false)
 
@@ -43,6 +42,6 @@ photogrammetry:
     tex_size: 32768                   # Texture size for UV mapping (Default: 1024)
 
 export_xtf:
-  enabled: true
+  enabled: false
   sonar_name: "ARC Scout Mk II"       # Name of the sonar for labeling outputs
   sample_dtype: uint16                # The sample datatype used (options: uint8, uint16, uint32, float32)

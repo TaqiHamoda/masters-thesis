@@ -7,7 +7,6 @@ from .dataset import Dataset
 
 class Photogrammetry:
     # Example: https://deepwiki.com/colmap/pycolmap/5.2-multi-view-stereo-(mvs)#complete-mvs-pipeline-example
-
     def __init__(self, dataset: Dataset, output_path: str = "output/"):
         self.dataset = dataset
         if len(self.dataset.images) == 0:
@@ -32,6 +31,10 @@ class Photogrammetry:
 
         self.mesh_path = self.output_dir / "mesh"
         self.mesh_ply = self.mesh_path / "mesh.ply"
+
+    @staticmethod
+    def get_reconstruction(dataset: Dataset) -> pycolmap.Reconstruction:
+        return pycolmap.Reconstruction(Photogrammetry(dataset).sparse_path)
 
     def extract_and_match_features(self,
         contrast_threshold: float = 0.002,
@@ -59,8 +62,9 @@ class Photogrammetry:
 
         # Source: https://github.com/colmap/colmap/issues/2976#issuecomment-3930305589
         with pycolmap.Database.open(self.database_path) as colmap_db:
-            position_covariance = np.diag(np.power(pos_std, 2))
+            gravity = np.array((0.0, 0.0, 1.0)).reshape(3, 1)  # In the NED frame
 
+            position_covariance = np.diag(np.power(pos_std, 2))
             for image in colmap_db.read_all_images():
                 ts = int(image.name.replace(".jpg", ''))
                 pose = self.dataset.images[ts].pose
@@ -71,6 +75,7 @@ class Photogrammetry:
                     pycolmap.PosePrior(
                         corr_data_id=image.data_id,  # Link the prior to the specific image's data identifier
                         position=position,
+                        gravity=gravity,
                         position_covariance=position_covariance,
                         coordinate_system=pycolmap.PosePriorCoordinateSystem.CARTESIAN
                     )

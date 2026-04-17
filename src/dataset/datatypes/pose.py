@@ -1,4 +1,7 @@
-from typing import Self, Tuple, Dict, Any
+from scipy.spatial.transform import Rotation as R
+import numpy as np
+
+from typing import Self, Dict, Any
 
 
 class Pose:
@@ -23,12 +26,18 @@ class Pose:
         self.qy = qy
         self.qz = qz
 
-    def translate(self, pos_delta: Tuple[float, float, float]) -> Self:
+    def translate(self, local_delta: np.ndarray) -> Self:
+        # scipy expects [x, y, z, w]
+        rot = R.from_quat([self.qx, self.qy, self.qz, self.qw])
+
+        # Transform into base frame
+        global_delta = rot.apply(local_delta)
+
         return Pose(
             self.timestamp,
-            self.x + pos_delta[0],
-            self.y + pos_delta[1],
-            self.z + pos_delta[2],
+            self.x + global_delta[0],
+            self.y + global_delta[1],
+            self.z + global_delta[2],
             self.qw,
             self.qx,
             self.qy,

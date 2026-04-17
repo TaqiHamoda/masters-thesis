@@ -1,4 +1,5 @@
 numpy
+scipy
 opencv-python
 pycolmap==4.0.3
 rosbags
@@ -6,3 +7,4 @@ tabulate
 tqdm
 pyyaml
 pymeshlab
+open3d

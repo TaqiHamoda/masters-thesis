@@ -86,5 +86,5 @@ if __name__ == "__main__":
         photogrammetry_pipeline(photogrammetry, photogrammetry_cfg)
 
     if xtf_cfg['enabled']:
-        print("Processing Sonar Data into XTF file.")
+        print("Processing Sonar Data into XTF file...")
         export_to_xtf(dataset, xtf_cfg['sonar_name'], xtf_cfg['sample_dtype'])

@@ -1,4 +1,7 @@
-from typing import Self, Dict, Any
+from scipy.spatial.transform import Rotation as R
+import numpy as np
+
+from typing import Self, Tuple, Dict, Any
 
 from .navigation import Navigation
 
@@ -22,6 +25,22 @@ class SideScanSonar:
         self.speed_of_sound = speed_of_sound
 
         self.bin_size = self.slant_range / self.num_samples
+
+    def get_plane(self, n_local: np.ndarray = np.array([1.0, 0.0, 0.0])) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Returns point and normal vector to define plane.
+
+        Default local normal vector assumes YZ plane fan (standard for Side-Scan Sonar).
+        """
+        pose = self.navigation.pose
+
+        pos = np.array([pose.x, pose.y, pose.z])
+        rot = R.from_quat([pose.qx, pose.qy, pose.qz, pose.qw])
+
+        # Rotate the local normal vector to the global frame
+        n_global = rot.apply(n_local)
+
+        return pos, n_global
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> Self:
