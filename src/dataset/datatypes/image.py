@@ -1,9 +1,10 @@
 from typing import Self, Dict, Any
 
+from .datatype import Datatype
 from .pose import Pose
 
 
-class Image:
+class Image(Datatype):
     headers = Pose.headers + ["fx", "fy", "cx", "cy"]
 
     def __init__(self,

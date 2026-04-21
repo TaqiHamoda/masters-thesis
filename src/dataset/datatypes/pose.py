@@ -3,8 +3,10 @@ import numpy as np
 
 from typing import Self, Dict, Any
 
+from .datatype import Datatype
 
-class Pose:
+
+class Pose(Datatype):
     headers = ["timestamp", "x", "y", "z", "qw", "qx", "qy", "qz"]
 
     def __init__(self,
@@ -26,9 +28,16 @@ class Pose:
         self.qy = qy
         self.qz = qz
 
-    def translate(self, local_delta: np.ndarray) -> Self:
+    def get_position(self) -> np.ndarray:
+        return np.array((self.x, self.y, self.z))
+
+    def get_rotation_matrix(self) -> np.ndarray:
+        """Returns rotation matrix which transforms point from body frame to NED frame"""
         # scipy expects [x, y, z, w]
-        rot = R.from_quat([self.qx, self.qy, self.qz, self.qw])
+        return R.from_quat([self.qx, self.qy, self.qz, self.qw]).as_matrix()
+
+    def translate(self, local_delta: np.ndarray) -> Self:
+        rot = self.get_rotation_matrix()
 
         # Transform into base frame
         global_delta = rot.apply(local_delta)

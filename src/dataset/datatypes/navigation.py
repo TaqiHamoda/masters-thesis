@@ -1,9 +1,10 @@
 from typing import Self, Dict, Any
 
+from .datatype import Datatype
 from .pose import Pose
 
 
-class Navigation:
+class Navigation(Datatype):
     headers = Pose.headers + ["latitude", "longitude", "altitude", "roll", "pitch", "yaw", "speed"]
 
     def __init__(self,

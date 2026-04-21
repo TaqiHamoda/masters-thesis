@@ -1,9 +1,11 @@
 import yaml
 from time import perf_counter, sleep
+from tqdm import tqdm
 
 from src.dataset import Dataset
 from src.photogrammetry import Photogrammetry
-from src.sonar import export_to_xtf
+from src.sonar import export_to_xtf, export_to_png
+from src.registration import process_optical_sidescan_matches
 
 
 def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
@@ -57,7 +59,8 @@ if __name__ == "__main__":
     topics_cfg = cfg['topics']
     extrinsics_cfg = cfg['extrinsics']
     photogrammetry_cfg = cfg['photogrammetry']
-    xtf_cfg = cfg['export_xtf']
+    xtf_cfg = cfg['process_acoustic']
+    optical_cfg = cfg['optical_registration']
 
     dataset = Dataset(
         data_path=paths_cfg['data_path'],
@@ -86,5 +89,18 @@ if __name__ == "__main__":
         photogrammetry_pipeline(photogrammetry, photogrammetry_cfg)
 
     if xtf_cfg['enabled']:
-        print("Processing Sonar Data into XTF file...")
-        export_to_xtf(dataset, xtf_cfg['sonar_name'], xtf_cfg['sample_dtype'])
+        if not dataset.sonar_xtf.exists():
+            print("Processing Sonar Data into XTF file...")
+            export_to_xtf(dataset, xtf_cfg['sonar_name'], xtf_cfg['sample_dtype'])
+
+        if not dataset.sonar_png.exists():
+            print("Processing Sonar Data into PNG file...")
+            export_to_png(dataset, xtf_cfg['sample_dtype'])
+
+    if optical_cfg['enabled']:
+        print("Performing optical registration...")
+
+        reconstruction = Photogrammetry.get_reconstruction(dataset)
+        for img in tqdm(reconstruction.images.values()):
+            matches = process_optical_sidescan_matches(dataset, img.name)
+            Dataset.write_data(dataset.matches_dir / f"{img.name}.csv", matches)

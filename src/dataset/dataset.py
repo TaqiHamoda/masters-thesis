@@ -8,7 +8,7 @@ from tabulate import tabulate
 from pathlib import Path
 from typing import List, Tuple, Dict
 
-from .datatypes import Image, Pose, SideScanSonar, Navigation
+from .datatypes import Datatype, Pose, Image, SideScanSonar, Navigation
 
 SONARTYPE_PORT_SIDESCAN = 1
 SONARTYPE_STARBOARD_SIDESCAN = 2
@@ -40,9 +40,13 @@ class Dataset:
         self.sonar_csv = self.output_path / "sonar_poses.csv"
         self.sonar_file = self.output_path / "sonar.pkl"
         self.sonar_xtf = self.output_path / "sonar.xtf"
+        self.sonar_png = self.output_path / "sonar.png"
 
         self.image_dir = self.output_path / "images"
         self.image_dir.mkdir(parents=True, exist_ok=True)
+
+        self.matches_dir = self.output_path / "matches"
+        self.matches_dir.mkdir(parents=True, exist_ok=True)
 
         self.img_topic = img_topic
         self.odo_topic = odo_topic
@@ -55,6 +59,13 @@ class Dataset:
 
         self.camera_trans = np.array(camera_trans)
         self.sonar_trans = np.array(sonar_trans)
+
+    @staticmethod
+    def write_data(file_path: Path, data: List[Datatype]):
+        with open(file_path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=data[0].headers)
+            writer.writeheader()
+            writer.writerows([d.to_dict() for d in data])
 
     def exists(self) -> bool:
         return self.cameras_csv.exists() and\
@@ -216,7 +227,7 @@ class Dataset:
             self.images[img_ts] = image
 
         nav_timestamps = np.array([n[0] for n in nav_data])
-        for sonar_ts, num_samples, slant_range, delay_range, freq, speed_of_sound in sonar_data:
+        for i, (sonar_ts, num_samples, slant_range, delay_range, freq, speed_of_sound) in enumerate(sonar_data):
             odo_idx = (np.abs(odo_timestamps - sonar_ts)).argmin()
             nav_idx = (np.abs(nav_timestamps - sonar_ts)).argmin()
 
@@ -225,6 +236,7 @@ class Dataset:
             matched_pose.timestamp = sonar_ts  # Update timestamp to match sonar
 
             sonar = SideScanSonar(
+                ping_idx=i,
                 num_samples=num_samples,
                 slant_range=slant_range,
                 delay_range=delay_range,
@@ -244,15 +256,8 @@ class Dataset:
             self.sonar[sonar_ts] = sonar
 
     def export_data(self):
-        with open(self.cameras_csv, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=Image.headers)
-            writer.writeheader()
-            writer.writerows([image.to_dict() for image in self.images.values()])
-
-        with open(self.sonar_csv, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=SideScanSonar.headers)
-            writer.writeheader()
-            writer.writerows([sonar.to_dict() for sonar in self.sonar.values()])
+        Dataset.write_data(self.cameras_csv, list(self.images.values()))
+        Dataset.write_data(self.sonar_csv, list(self.sonar.values()))
 
     def data_stats(self):
         min_x, min_y, min_z, min_alt = np.inf, np.inf, np.inf, np.inf

@@ -68,7 +68,7 @@ class Photogrammetry:
             for image in colmap_db.read_all_images():
                 ts = int(image.name.replace(".jpg", ''))
                 pose = self.dataset.images[ts].pose
-                position = np.array((pose.x, pose.y, pose.z)).reshape(3, 1)
+                position = pose.get_position().reshape(3, 1)
 
                 # Coordinate system: Cartesian (X,Y,Z coords, not Lat/Lon)
                 colmap_db.write_pose_prior(
