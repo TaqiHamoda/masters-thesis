@@ -37,10 +37,10 @@ class Pose(Datatype):
         return R.from_quat([self.qx, self.qy, self.qz, self.qw]).as_matrix()
 
     def translate(self, local_delta: np.ndarray) -> Self:
-        rot = self.get_rotation_matrix()
+        body_R_ned = self.get_rotation_matrix()
 
         # Transform into base frame
-        global_delta = rot.apply(local_delta)
+        global_delta = body_R_ned @ local_delta
 
         return Pose(
             self.timestamp,

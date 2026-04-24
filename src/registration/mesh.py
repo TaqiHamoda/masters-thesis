@@ -2,8 +2,9 @@ import open3d as o3d
 import numpy as np
 from typing import List
 
-from ..dataset import Dataset, Plane
+from ..dataset import Dataset, Pose, SideScanSonar, VertexHit
 from ..photogrammetry import Photogrammetry
+from .utils import get_distances, get_intersections, get_corresponding_channels, get_incidence_angles
 
 
 class ReflectivityMesh:
@@ -21,54 +22,76 @@ class ReflectivityMesh:
 
         self.vertices = np.asarray(self.mesh.vertices)
 
-    def filter_occluded_vertices(self,
-        plane: Plane,
-        epsilon: float = 1e-4
+    def get_visible_vertices(self,
+        sss: SideScanSonar,
+        eps: float = 1e-4
     ) -> np.ndarray:
         """
         Raytraces from triangle centroids towards the transducer to check for collisions.
-        Returns the indices of triangles that have a clear line-of-sight.
+        Returns the indices of which vertices have a clear, unobstructed line-of-sight.
         """
-        vertex_indices = plane.get_intersections(self.vertices)
+        pose = sss.navigation.pose
 
-        if len(vertex_indices) == 0:
+        inters = get_intersections(pose, self.vertices)
+        dists = get_distances(pose, self.vertices[inters])
+
+        inters[inters] = dists < sss.slant_range
+        if not np.any(inters):
             return np.array([])
 
-        # 3. Calculate vectors, distances, and normalized directions to the transducer
-        origins = self.centroids[vertex_indices]
-        transducer_pos = np.array([plane.x, plane.y, plane.z])
+        origins = self.vertices[inters]
+        vs_ned = pose.get_position() - origins
+        distances = np.linalg.norm(vs_ned, axis=1)
 
-        vectors_to_transducer = transducer_pos - origins
-        distances = np.linalg.norm(vectors_to_transducer, axis=1)
+        directions = vs_ned / (distances + eps)
+        origins_offset = origins + (directions * eps)
 
-        # Handle potential division by zero if a centroid is exactly at the transducer
-        with np.errstate(divide='ignore', invalid='ignore'):
-            directions = vectors_to_transducer / distances[:, np.newaxis]
-            directions = np.nan_to_num(directions)
-
-        # 4. Offset the ray origins slightly to avoid self-intersection with the starting triangle
-        origins_offset = origins + (directions * epsilon)
-
-        # 5. Prepare the rays for Open3D (Format: [ox, oy, oz, dx, dy, dz])
         rays = np.hstack((origins_offset, directions)).astype(np.float32)
         rays_t = o3d.core.Tensor(rays)
 
-        # 6. Cast the rays
         ans = self.scene.cast_rays(rays_t)
-        
-        # 't_hit' is the distance along the ray until it hits the mesh. 
-        # If it doesn't hit anything, it returns infinity (inf).
         hit_distances = ans['t_hit'].numpy()
 
-        # 7. Check for collisions
         # A collision occurs if the ray hits the mesh BEFORE it reaches the transducer.
         # We subtract epsilon from the target distance because we pushed the origin forward.
-        target_distances = distances - epsilon
-        
-        # True if the ray hits a mesh face before reaching the transducer
-        is_occluded = hit_distances < target_distances
+        inters[inters] = hit_distances < distances - eps
+        return np.flatnonzero(inters)
 
-        # Return only the indices of the triangles that are NOT occluded
-        visible_triangles = vertex_indices[~is_occluded]
+    def process_sidescan_hits(
+        self,
+        timestamp: int,
+        pose: Pose,
+    ) -> List[VertexHit]:
+        """
+        Parameters:
+            timestamp: sonar ping timestamp
+            pose: sonar ping pose
+        """
+        sss = self.dataset.sonar[timestamp]
 
-        return visible_triangles
+        is_valid = self.get_visible_vertices(sss)
+        if not np.any(is_valid):
+            return []
+
+        vertices = self.vertices[is_valid]
+        distances = get_distances(pose, vertices)
+        channels = get_corresponding_channels(pose, vertices)
+        incidence_angles = get_incidence_angles(pose, vertices)
+        bins = np.round(sss.num_samples * distances / sss.slant_range).astype(int)
+
+        hits = []
+        for i, v_id in enumerate(is_valid):
+            hits.append(VertexHit(
+                pose=pose,
+                ping_idx=sss.ping_idx,
+                channel_idx=channels[i],
+                bin_idx=bins[i],
+                vertex_idx=v_id,
+                v_x=vertices[i, 0],
+                v_y=vertices[i, 1],
+                v_z=vertices[i, 2],
+                distance=distances[i],
+                incidence_angle=incidence_angles[i]
+            ))
+
+        return hits

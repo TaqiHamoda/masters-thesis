@@ -42,7 +42,7 @@ photogrammetry:
     tex_size: 32768                   # Texture size for UV mapping (Default: 1024)
 
 process_acoustic:                     # Generates an XTF and a PNG using the SSS data
-  enabled: true
+  enabled: false
   sonar_name: "ARC Scout Mk II"       # Name of the sonar for labeling outputs
   sample_dtype: uint16                # The sample datatype used (options: uint8, uint16, uint32, float32)
 

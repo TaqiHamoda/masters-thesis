@@ -1,11 +1,12 @@
 import yaml
 from time import perf_counter, sleep
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
 
 from src.dataset import Dataset
 from src.photogrammetry import Photogrammetry
 from src.sonar import export_to_xtf, export_to_png
-from src.registration import process_optical_sidescan_matches
+from src.registration import interpolate_poses, get_image_geometry, process_optical_sidescan_matches
 
 
 def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
@@ -47,6 +48,15 @@ def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
         start_time = perf_counter()
         photogrammetry.create_mesh(**cfg['mesh'])
         print(f"Mesh completed in {perf_counter() - start_time:.2f}s")
+
+
+def process_optical_single_image(img, reconstruction, dataset, poses):
+    ts = int(img.name.replace(".jpg", ''))
+
+    optical, points = get_image_geometry(reconstruction, img.image_id)
+    matches = process_optical_sidescan_matches(dataset, poses[0][ts], poses[1], optical, points)
+
+    Dataset.write_data(dataset.matches_dir / f"{ts}.csv", matches)
 
 
 if __name__ == "__main__":
@@ -101,6 +111,15 @@ if __name__ == "__main__":
         print("Performing optical registration...")
 
         reconstruction = Photogrammetry.get_reconstruction(dataset)
-        for img in tqdm(reconstruction.images.values()):
-            matches = process_optical_sidescan_matches(dataset, img.name)
-            Dataset.write_data(dataset.matches_dir / f"{img.name}.csv", matches)
+        interpolated_poses = interpolate_poses(dataset, reconstruction)
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            images = list(reconstruction.images.values())
+
+            list(tqdm(
+                executor.map(
+                    lambda img: process_optical_single_image(img, reconstruction, dataset, interpolated_poses),
+                    images
+                ),
+                total=len(images),
+            ))

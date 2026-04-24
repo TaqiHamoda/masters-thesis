@@ -3,7 +3,6 @@ import numpy as np
 from typing import Tuple, List, Dict
 
 from ..dataset import Dataset, Pose
-from ..photogrammetry import Photogrammetry
 
 
 def interpolate(pose_timestamps: List[int], refined_timestamps: List[int], refined_poses: Dict[int, pycolmap.Rigid3d]) -> Dict[int, Pose]:
@@ -47,12 +46,10 @@ def interpolate(pose_timestamps: List[int], refined_timestamps: List[int], refin
     return inter_poses
 
 
-def interpolate_poses(dataset: Dataset) -> Tuple[Dict[int, Pose], Dict[int, Pose]]:
+def interpolate_poses(dataset: Dataset, reconstruction: pycolmap.Reconstruction) -> Tuple[Dict[int, Pose], Dict[int, Pose]]:
     """
     Returns the interpolated camera and sonar poses based on COLMAP's sparse refinement.
     """
-    reconstruction = Photogrammetry.get_reconstruction(dataset)
-
     refined_poses = {}
     for image in reconstruction.images.values():
         timestamp = int(image.name.replace(".jpg", ''))
@@ -74,18 +71,16 @@ def interpolate_poses(dataset: Dataset) -> Tuple[Dict[int, Pose], Dict[int, Pose
     return camera_poses, sonar_poses
 
 
-def get_image_geometry(dataset: Dataset, img_name: str) -> Tuple[np.ndarray, np.ndarray]:
+def get_image_geometry(reconstruction: pycolmap.Reconstruction, img_id: int) -> Tuple[np.ndarray, np.ndarray]:
     """
     Parameters:
-        dataset: The datset object.
+        reconstruction: sparse reconstruction object.
         img_name: The name of the image.
 
     Returns:
         Tuple[np.ndarray, np.ndarray]: Two nx3 numpy arrays that contain the 2D points in the image frame along with their corresponding 3D points in NED frame.
     """
-    reconstruction = Photogrammetry.get_reconstruction(dataset)
-
-    image = reconstruction.images[img_name]
+    image = reconstruction.image(img_id)
     if image.num_points3D < 0:
         return np.array([]), np.array([])
 
@@ -99,7 +94,7 @@ def get_image_geometry(dataset: Dataset, img_name: str) -> Tuple[np.ndarray, np.
         u, v = point2d.xy
         x, y, z = point3d.xyz
 
-        points_2d.append((u, v))
+        points_2d.append((int(u), int(v)))
         points_3d.append((x, y, z))
 
     return np.array(points_2d), np.array(points_3d)
@@ -136,7 +131,7 @@ def get_intersections(pose: Pose, points: np.ndarray, n_local: np.ndarray = np.a
     plane_normal = body_R_ned @ n_local  # Rotate the local normal vector to the global frame
 
     # shortest distance to the plane
-    distance = np.dot(plane_normal, points - plane_pos)
+    distance = np.dot(plane_normal, (points - plane_pos).T).T
     return np.abs(distance) <= thickness / 2.0
 
 
