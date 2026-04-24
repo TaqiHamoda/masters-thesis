@@ -47,4 +47,8 @@ process_acoustic:                     # Generates an XTF and a PNG using the SSS
   sample_dtype: uint16                # The sample datatype used (options: uint8, uint16, uint32, float32)
 
 optical_registration:
-  enabled: true
+  enabled: false
+
+visualizations:
+  sparse_pointcloud: true             # Enable sparse pointcloud visualization
+  optical_registration: false         # Enable optical registration visualization

@@ -7,6 +7,7 @@ from src.dataset import Dataset
 from src.photogrammetry import Photogrammetry
 from src.sonar import export_to_xtf, export_to_png
 from src.registration import interpolate_poses, get_image_geometry, process_optical_sidescan_matches
+from src.visualization import visualize_sparse_pointcloud
 
 
 def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
@@ -71,6 +72,7 @@ if __name__ == "__main__":
     photogrammetry_cfg = cfg['photogrammetry']
     xtf_cfg = cfg['process_acoustic']
     optical_cfg = cfg['optical_registration']
+    visual_cfg = cfg['visualizations']
 
     dataset = Dataset(
         data_path=paths_cfg['data_path'],
@@ -123,3 +125,6 @@ if __name__ == "__main__":
                 ),
                 total=len(images),
             ))
+
+    if visual_cfg['sparse_pointcloud']:
+        visualize_sparse_pointcloud(dataset)

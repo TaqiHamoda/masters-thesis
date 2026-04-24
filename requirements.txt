@@ -7,4 +7,7 @@ tabulate
 tqdm
 pyyaml
 pymeshlab
+pyxtf
 open3d
+viser
+matplotlib

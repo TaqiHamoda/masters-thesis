@@ -5,11 +5,14 @@ from typing import Tuple, List, Dict
 from ..dataset import Dataset, Pose
 
 
-def interpolate(pose_timestamps: List[int], refined_timestamps: List[int], refined_poses: Dict[int, pycolmap.Rigid3d]) -> Dict[int, Pose]:
+def interpolate(poses: Dict[int, Pose], refined_poses: Dict[int, pycolmap.Rigid3d]) -> Dict[int, Pose]:
     # Source: https://deepwiki.com/colmap/pycolmap/4.4-geometric-transformations#rigid3d
     # Source: https://colmap.github.io/pycolmap/pycolmap.html#pycolmap.Rigid3d
 
     inter_poses = {}
+
+    pose_timestamps = np.array(sorted(poses.keys()))
+    refined_timestamps = np.array(sorted(refined_poses.keys()))
 
     n = len(refined_timestamps)
     for ts in pose_timestamps:
@@ -55,10 +58,8 @@ def interpolate_poses(dataset: Dataset, reconstruction: pycolmap.Reconstruction)
         timestamp = int(image.name.replace(".jpg", ''))
         refined_poses[timestamp] = image.cam_from_world()
 
-    refined_timestamps = np.array(sorted(refined_poses.keys()))
-
-    camera_poses = interpolate(dataset.images.keys(), refined_timestamps, refined_poses)
-    sonar_poses = interpolate(dataset.sonar.keys(), refined_timestamps, refined_poses)
+    camera_poses = interpolate(dataset.images, refined_poses)
+    sonar_poses = interpolate(dataset.sonar, refined_poses)
 
     # Correct the extrinsics for sonar pose (colmap is wrt camera frame)
     for ts in list(sonar_poses.keys()):

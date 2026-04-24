@@ -62,20 +62,20 @@ class Photogrammetry:
 
         # Source: https://github.com/colmap/colmap/issues/2976#issuecomment-3930305589
         with pycolmap.Database.open(self.database_path) as colmap_db:
-            gravity = np.array((0.0, 0.0, 1.0)).reshape(3, 1)  # In the NED frame
 
             position_covariance = np.diag(np.power(pos_std, 2))
             for image in colmap_db.read_all_images():
                 ts = int(image.name.replace(".jpg", ''))
                 pose = self.dataset.images[ts].pose
-                position = pose.get_position().reshape(3, 1)
+                position = pose.get_position()
+                gravity = pose.get_rotation_matrix().T @ np.array((0, 0, 1))
 
                 # Coordinate system: Cartesian (X,Y,Z coords, not Lat/Lon)
                 colmap_db.write_pose_prior(
                     pycolmap.PosePrior(
                         corr_data_id=image.data_id,  # Link the prior to the specific image's data identifier
-                        position=position,
-                        gravity=gravity,
+                        position=position.reshape(3, 1),
+                        gravity=gravity.reshape(3, 1),
                         position_covariance=position_covariance,
                         coordinate_system=pycolmap.PosePriorCoordinateSystem.CARTESIAN
                     )
