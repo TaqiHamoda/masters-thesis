@@ -38,7 +38,7 @@ class Dataset:
 
         self.cameras_csv = self.output_path / "camera_poses.csv"
         self.sonar_csv = self.output_path / "sonar_poses.csv"
-        self.sonar_file = self.output_path / "sonar.pkl"
+        self.sonar_file = self.output_path / "sonar.npz"
         self.sonar_xtf = self.output_path / "sonar.xtf"
         self.sonar_png = self.output_path / "sonar.png"
 
@@ -114,7 +114,7 @@ class Dataset:
         odometry_data: List[Tuple[int, Pose]] = []
         images_metadata: List[int] = []
         sonar_data: List[Tuple[int, int, float]] = []
-        acoustic_data: Dict[int, Tuple[List[float], List[float]]] = {}
+        acoustic_data: List[np.ndarray] = []
         nav_data: List[Tuple[int, float, float, float, float, float, float]] = []
 
         with AnyReader(self.bag_paths, default_typestore=self.typestore) as reader:
@@ -188,7 +188,7 @@ class Dataset:
                         speed_of_sound
                     ))
 
-                    acoustic_data[timestamp] = (port_intensities, stbd_intensities)
+                    acoustic_data.append(np.concatenate((port_intensities, stbd_intensities)))
                 elif connection.topic == self.nav_topic:
                     x_velocity, y_velocity, z_velocity = msg.body_velocity.x, msg.body_velocity.y, msg.body_velocity.z
                     speed = np.sqrt(x_velocity**2 + y_velocity**2 + z_velocity**2)
@@ -208,8 +208,7 @@ class Dataset:
             raise ValueError("Error: Missing data in topics. Check your bag topic names.")
 
         if not self.sonar_file.exists():
-            with open(self.sonar_file, "wb") as f:
-                pickle.dump(acoustic_data, f)
+            np.savez_compressed(self.sonar_file, data=np.array(acoustic_data))
 
         odo_timestamps = np.array([o[0] for o in odometry_data])
         for img_ts in images_metadata:

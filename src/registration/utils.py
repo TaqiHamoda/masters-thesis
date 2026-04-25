@@ -1,20 +1,38 @@
 import pycolmap
 import numpy as np
-from typing import Tuple, List, Dict
+from scipy.spatial.transform import Rotation as R
+from typing import Tuple, Dict
 
 from ..dataset import Dataset, Pose
 
 
-def interpolate(poses: Dict[int, Pose], refined_poses: Dict[int, pycolmap.Rigid3d]) -> Dict[int, Pose]:
+def mean_position_orientation_error(refined_poses: Dict[int, Pose], poses: Dict[int, Pose]) -> Tuple[np.ndarray, np.ndarray]:
+    pos_d, rot_d = [], []
+    for ts, refined_pose in refined_poses.items():
+        pose = poses[ts]
+
+        pos_d.append(pose.get_position() - refined_pose.get_position())
+
+        r_c = R.from_quat(refined_pose.get_quaternion())
+        r_i = R.from_quat(pose.get_quaternion())
+        r_diff = r_i * r_c.inv()
+        rot_d.append(r_diff.as_quat())
+
+    avg_pos = np.mean(pos_d, axis=0)
+    avg_rot = R.from_quat(rot_d).mean().as_quat()
+
+    return avg_pos, avg_rot
+
+
+def interpolate(poses: Dict[int, Pose], refined_poses: Dict[int, Pose], colmap_R_world: np.ndarray) -> Dict[int, Pose]:
     # Source: https://deepwiki.com/colmap/pycolmap/4.4-geometric-transformations#rigid3d
     # Source: https://colmap.github.io/pycolmap/pycolmap.html#pycolmap.Rigid3d
 
-    inter_poses = {}
-
+    n = len(refined_poses)
     pose_timestamps = np.array(sorted(poses.keys()))
     refined_timestamps = np.array(sorted(refined_poses.keys()))
 
-    n = len(refined_timestamps)
+    inter_poses = {}
     for ts in pose_timestamps:
         idx = (np.abs(refined_timestamps - ts)).argmin()
 
@@ -22,29 +40,18 @@ def interpolate(poses: Dict[int, Pose], refined_poses: Dict[int, pycolmap.Rigid3
 
         delta_t = abs(ts - r_ts)
         if ts > r_ts and idx < n - 1:
-            pose_1 = refined_poses[refined_timestamps[idx]]
-            pose_2 = refined_poses[refined_timestamps[idx + 1]]
+            pose_1 = refined_poses[refined_timestamps[idx]].to_pycolmap()
+            pose_2 = refined_poses[refined_timestamps[idx + 1]].to_pycolmap()
             delta_t /= refined_timestamps[idx + 1] - refined_timestamps[idx]
         elif ts <= r_ts and idx > 0:
-            pose_1 = refined_poses[refined_timestamps[idx - 1]]
-            pose_2 = refined_poses[refined_timestamps[idx]]
+            pose_1 = refined_poses[refined_timestamps[idx - 1]].to_pycolmap()
+            pose_2 = refined_poses[refined_timestamps[idx]].to_pycolmap()
             delta_t /= refined_timestamps[idx] - refined_timestamps[idx - 1]
         else:
             continue
 
-        # Invert from cam_from_world to world_from_cam (same as dataset poses)
-        interpolated_pose = pycolmap.Rigid3d.interpolate(pose_1, pose_2, delta_t).inverse()
-
-        inter_poses[ts] = Pose(
-            timestamp=ts,
-            qx=interpolated_pose.params[0],
-            qy=interpolated_pose.params[1],
-            qz=interpolated_pose.params[2],
-            qw=interpolated_pose.params[3],
-            x=interpolated_pose.params[4],
-            y=interpolated_pose.params[5],
-            z=interpolated_pose.params[6],
-        )
+        interpolated_pose = Pose.from_pycolmap(ts, pycolmap.Rigid3d.interpolate(pose_1, pose_2, delta_t))
+        inter_poses[ts] = interpolated_pose.rotate(colmap_R_world)
 
     return inter_poses
 
@@ -55,11 +62,18 @@ def interpolate_poses(dataset: Dataset, reconstruction: pycolmap.Reconstruction)
     """
     refined_poses = {}
     for image in reconstruction.images.values():
+        # Invert from cam_from_world to world_from_cam (same as dataset poses)
         timestamp = int(image.name.replace(".jpg", ''))
-        refined_poses[timestamp] = image.cam_from_world()
+        refined_poses[timestamp] = Pose.from_pycolmap(timestamp, image.cam_from_world().inverse())
 
-    camera_poses = interpolate(dataset.images, refined_poses)
-    sonar_poses = interpolate(dataset.sonar, refined_poses)
+    # Find the average rotation difference to correct for COLMAP's arbitrary global frame.
+    c_poses = {ts: img.pose for ts, img in dataset.images.items()}
+    s_poses = {ts: sss.navigation.pose for ts, sss in dataset.sonar.items()}
+
+    _, colmap_R_world = mean_position_orientation_error(refined_poses, c_poses)
+
+    camera_poses = interpolate(c_poses, refined_poses, colmap_R_world)
+    sonar_poses = interpolate(s_poses, refined_poses, colmap_R_world)
 
     # Correct the extrinsics for sonar pose (colmap is wrt camera frame)
     for ts in list(sonar_poses.keys()):
@@ -95,7 +109,7 @@ def get_image_geometry(reconstruction: pycolmap.Reconstruction, img_id: int) -> 
         u, v = point2d.xy
         x, y, z = point3d.xyz
 
-        points_2d.append((int(u), int(v)))
+        points_2d.append((int(round(u)), int(round(v))))
         points_3d.append((x, y, z))
 
     return np.array(points_2d), np.array(points_3d)

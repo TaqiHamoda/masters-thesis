@@ -5,7 +5,7 @@ from .pose import Pose
 
 
 class ImageHit(Datatype):
-    headers = Pose.headers + ["u", "v", "p_x", "p_y", "p_z", "ping_idx", "channel_idx", "bin_idx", "distance", "incidence_angle"]
+    headers = Pose.headers + ["u", "v", "p_x", "p_y", "p_z", "ping_idx", "bin_idx", "distance", "incidence_angle"]
 
     def __init__(self,
         pose: Pose,
@@ -15,7 +15,6 @@ class ImageHit(Datatype):
         p_y: float,
         p_z: float,
         ping_idx: int,
-        channel_idx: int,
         bin_idx: int,
         distance: float,
         incidence_angle: float
@@ -27,7 +26,6 @@ class ImageHit(Datatype):
         self.p_y = p_y
         self.p_z = p_z
         self.ping_idx = ping_idx
-        self.channel_idx = channel_idx
         self.bin_idx = bin_idx
         self.distance = distance
         self.incidence_angle = incidence_angle
@@ -42,7 +40,6 @@ class ImageHit(Datatype):
             p_y=float(data["p_y"]),
             p_z=float(data["p_z"]),
             ping_idx=int(data["ping_idx"]),
-            channel_idx=int(data["channel_idx"]),
             bin_idx=int(data["bin_idx"]),
             distance=float(data["distance"]),
             incidence_angle=float(data["incidence_angle"])
@@ -56,7 +53,6 @@ class ImageHit(Datatype):
             "p_y": self.p_y,
             "p_z": self.p_z,
             "ping_idx": self.ping_idx,
-            "channel_idx": self.channel_idx,
             "bin_idx": self.bin_idx,
             "distance": self.distance,
             "incidence_angle": self.incidence_angle

@@ -31,18 +31,21 @@ def process_optical_sidescan_matches(
         distances = get_distances(sss_pose, p_inters)
         channels = get_corresponding_channels(sss_pose, p_inters)
         incidence_angles = get_incidence_angles(sss_pose, p_inters)
-        bins = np.round(sss.num_samples * distances / sss.slant_range).astype(int)
 
+        bins = sss.num_samples * distances / sss.slant_range
+        bins = sss.num_samples + np.power(-1, 1 - channels) * bins
+        bins = np.round(bins).astype(int)
+
+        sss_pose.timestamp = pose.timestamp  # Set the timestamp to be the same as the image for easier matching later
         for i in range(len(distances)):
             matches.append(ImageHit(
-                pose=pose,
+                pose=sss_pose,
                 u=o_inters[i, 0],
                 v=o_inters[i, 1],
                 p_x=p_inters[i, 0],
                 p_y=p_inters[i, 1],
                 p_z=p_inters[i, 2],
                 ping_idx=sss.ping_idx,
-                channel_idx=channels[i],
                 bin_idx=bins[i],
                 distance=distances[i],
                 incidence_angle=incidence_angles[i]

@@ -1,6 +1,5 @@
 import random
 import time
-from pathlib import Path
 from typing import List
 
 import imageio.v3 as iio
@@ -14,6 +13,8 @@ from viser.extras.colmap import (
     read_images_binary,
     read_points3d_binary,
 )
+
+from scipy.spatial.transform import Rotation as R
 
 from ..dataset import Dataset
 from ..photogrammetry import Photogrammetry
@@ -59,7 +60,7 @@ def visualize_sparse_pointcloud(dataset: Dataset, downsample_factor: int = 2) ->
         initial_value=min(len(images), 50),
     )
     gui_point_size = server.gui.add_slider(
-        "Point size", min=0.01, max=0.1, step=0.001, initial_value=0.02
+        "Point size", min=0.01, max=0.1, step=0.001, initial_value=0.1
     )
 
     point_mask = np.random.choice(points.shape[0], gui_points.value, replace=False)

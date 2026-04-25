@@ -1,5 +1,5 @@
 import numpy as np
-import ctypes, datetime, pyxtf, pickle
+import ctypes, datetime, pyxtf
 
 from ..dataset import Dataset
 from .utils import get_sample_dtype, get_sample_format
@@ -9,7 +9,7 @@ def export_to_xtf(dataset: Dataset, sonar_name: str, sample_dtype: str = "uint8"
     # Source: https://github.com/oysstu/pyxtf/blob/master/examples/write_xtf.py
 
     timestamps = sorted(dataset.sonar.keys())
-    sonar_data = pickle.loads(dataset.sonar_file.read_bytes())
+    sonar_data = np.load(dataset.sonar_file)['data']
 
     sample_datatype = get_sample_dtype(sample_dtype)
     sample_bytes = np.dtype(sample_datatype).itemsize
@@ -38,8 +38,8 @@ def export_to_xtf(dataset: Dataset, sonar_name: str, sample_dtype: str = "uint8"
 
     pings = []
     for i, timestamp in enumerate(timestamps):
-        port, stbd = sonar_data[timestamp]
         sidescan = dataset.sonar[timestamp]
+        port, stbd = sonar_data[sidescan.ping_idx, :sidescan.num_samples], sonar_data[sidescan.ping_idx, sidescan.num_samples:]
 
         p = pyxtf.XTFPingHeader()
         p.HeaderType = pyxtf.XTFHeaderType.sonar.value

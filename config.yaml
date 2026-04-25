@@ -46,9 +46,9 @@ process_acoustic:                     # Generates an XTF and a PNG using the SSS
   sonar_name: "ARC Scout Mk II"       # Name of the sonar for labeling outputs
   sample_dtype: uint16                # The sample datatype used (options: uint8, uint16, uint32, float32)
 
-optical_registration:
+optical_registration:                 # Requires the sparse photogrammetry reconstruction to be completed
   enabled: false
 
 visualizations:
-  sparse_pointcloud: true             # Enable sparse pointcloud visualization
-  optical_registration: false         # Enable optical registration visualization
+  sparse_pointcloud: false            # Enable sparse pointcloud visualization (Requires photogrammetry reconstruction)
+  optical_registration: true         # Enable optical registration visualization (Requires sonar png and optical matches)
