@@ -51,13 +51,17 @@ def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
         print(f"Mesh completed in {perf_counter() - start_time:.2f}s")
 
 
-def process_optical_single_image(img, reconstruction, dataset, poses):
+def process_optical_single_image(img, reconstruction, dataset, poses, sonar_offset):
     ts = int(img.name.replace(".jpg", ''))
 
-    optical, points = get_image_geometry(reconstruction, img.image_id)
-    matches = process_optical_sidescan_matches(dataset, poses[0][ts], poses[1], optical, points)
+    matches_file = dataset.matches_dir / f"{ts}.csv"
+    if matches_file.exists():
+        return
 
-    Dataset.write_data(dataset.matches_dir / f"{ts}.csv", matches)
+    optical, points = get_image_geometry(reconstruction, img.image_id)
+    matches = process_optical_sidescan_matches(dataset, poses[0][ts], poses[1], optical, points, sonar_offset)
+
+    Dataset.write_data(matches_file, matches)
 
 
 if __name__ == "__main__":
@@ -120,7 +124,7 @@ if __name__ == "__main__":
 
             list(tqdm(
                 executor.map(
-                    lambda img: process_optical_single_image(img, reconstruction, dataset, interpolated_poses),
+                    lambda img: process_optical_single_image(img, reconstruction, dataset, interpolated_poses, extrinsics_cfg['sonar_offset']),
                     images
                 ),
                 total=len(images),

@@ -39,7 +39,7 @@ def interpolate(poses: Dict[int, Pose], refined_poses: Dict[int, Pose], colmap_R
         r_ts = refined_timestamps[idx]
 
         delta_t = abs(ts - r_ts)
-        if ts > r_ts and idx < n - 1:
+        if ts >= r_ts and idx < n - 1:
             pose_1 = refined_poses[refined_timestamps[idx]].to_pycolmap()
             pose_2 = refined_poses[refined_timestamps[idx + 1]].to_pycolmap()
             delta_t /= refined_timestamps[idx + 1] - refined_timestamps[idx]
@@ -180,8 +180,12 @@ def get_incidence_angles(pose: Pose, points: np.ndarray, eps: float = 1e-6) -> n
     """
 
     v_ned = points - pose.get_position()
-
-    opposite = v_ned[:, 2]  # Z difference
-    adjacent = v_ned[:, 1]  # Y difference
-
+    
+    # Rotate to Body frame to get correct cross-track distance
+    ned_R_body = pose.get_rotation_matrix().T
+    v_body = (ned_R_body @ v_ned.T).T
+    
+    opposite = v_ned[:, 2]           # Depth/Z difference
+    adjacent = np.abs(v_body[:, 1])  # Cross-track/Y difference in body frame
+    
     return np.arctan(opposite / (adjacent + eps))

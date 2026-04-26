@@ -1,14 +1,16 @@
 import csv
 import time
 from typing import List
-from pathlib import Path
 
 import cv2
-import imageio.v3 as iio
 import numpy as np
 import viser
 import viser.transforms as vtf
-from viser.extras.colmap import read_points3d_binary
+from viser.extras.colmap import (
+    read_cameras_binary,
+    read_images_binary,
+    read_points3d_binary,
+)
 
 from ..dataset import Dataset, ImageHit
 from ..photogrammetry import Photogrammetry
@@ -35,12 +37,17 @@ class MatchVisualizer:
 
         # Load SSS waterfall (convert to RGB so we can draw a red dot on it)
         self.sss_image = cv2.imread(str(dataset.sonar_png), cv2.IMREAD_COLOR_RGB)
+        self.sss_image = cv2.flip(self.sss_image, 0)
 
         # Pre-declare layout handles
         self.cam_img_marked = None
         self.sss_patch_marked = None
         self.target_3d = None
-        self.current_pose = None
+        self.auv_pose = None
+
+        self.camera = None
+        self.camera_poses = None
+        self.camera_frame = None
 
         # Load Colmap Point Cloud
         self._load_point_cloud()
@@ -52,11 +59,18 @@ class MatchVisualizer:
         self.set_image()
         self.update_view()
 
-
     def _load_point_cloud(self):
         """Loads and displays the sparse point cloud in the 3D scene."""
         colmap_path = Photogrammetry(self.dataset).sparse_path
         points3d = read_points3d_binary(colmap_path / "points3D.bin")
+        cameras = read_cameras_binary(colmap_path / "cameras.bin")
+        images = read_images_binary(colmap_path / "images.bin")
+
+        self.camera = cameras.popitem()[1]
+        self.camera_poses = {
+            int(img.name.replace(".jpg", '')): (img.qvec, img.tvec)
+            for img in images.values()
+        }
 
         points = np.array([points3d[p_id].xyz for p_id in points3d])
         colors = np.array([points3d[p_id].rgb for p_id in points3d])
@@ -69,7 +83,7 @@ class MatchVisualizer:
             name="/colmap/pcd",
             points=points,
             colors=colors,
-            point_size=0.05,
+            point_size=0.1,
         )
 
     def _build_gui(self):
@@ -79,16 +93,18 @@ class MatchVisualizer:
         # Image Controls
         folder_img = self.server.gui.add_folder("Image Navigation")
         with folder_img:
+            btn_prev_img_100 = self.server.gui.add_button("-100 Images")
             btn_prev_img = self.server.gui.add_button("Prev Image")
             btn_next_img = self.server.gui.add_button("Next Image")
+            btn_next_img_100 = self.server.gui.add_button("+100 Images")
 
         # Match Controls
         folder_match = self.server.gui.add_folder("Match Navigation")
         with folder_match:
-            btn_prev_100 = self.server.gui.add_button("-100 Matches")
+            btn_prev_match_100 = self.server.gui.add_button("-100 Matches")
             btn_prev_match = self.server.gui.add_button("Prev Match")
             btn_next_match = self.server.gui.add_button("Next Match")
-            btn_next_100 = self.server.gui.add_button("+100 Matches")
+            btn_next_match_100 = self.server.gui.add_button("+100 Matches")
 
         # Layout & Display Controls
         folder_layout = self.server.gui.add_folder("Display Settings")
@@ -116,6 +132,13 @@ class MatchVisualizer:
             )
 
         # --- Callbacks: Navigation ---
+        @btn_prev_img_100.on_click
+        def _(_) -> None:
+            if self.current_img_idx > 0:
+                self.current_img_idx = max(0, self.current_img_idx - 100)
+                self.set_image()
+                self.update_view()
+
         @btn_prev_img.on_click
         def _(_) -> None:
             if self.current_img_idx > 0:
@@ -130,7 +153,14 @@ class MatchVisualizer:
                 self.set_image()
                 self.update_view()
 
-        @btn_prev_100.on_click
+        @btn_next_img_100.on_click
+        def _(_) -> None:
+            if self.current_img_idx < len(self.images) - 1:
+                self.current_img_idx = min(len(self.images) - 1, self.current_img_idx + 100)
+                self.set_image()
+                self.update_view()
+
+        @btn_prev_match_100.on_click
         def _(_) -> None:
             self.current_match_idx = max(0, self.current_match_idx - 100)
             self.update_view()
@@ -145,7 +175,7 @@ class MatchVisualizer:
             self.current_match_idx = min(len(self.matches) - 1, self.current_match_idx + 1)
             self.update_view()
 
-        @btn_next_100.on_click
+        @btn_next_match_100.on_click
         def _(_) -> None:
             self.current_match_idx = min(len(self.matches) - 1, self.current_match_idx + 100)
             self.update_view()
@@ -168,6 +198,10 @@ class MatchVisualizer:
         @self.gui_auv_scale.on_update
         def _(_) -> None: self._render_scene_objects()
 
+    def get_timestamp(self) -> int:
+        """Returns the timestamp of the current image."""
+        return int(self.images[self.current_img_idx].name.replace(".csv", ''))
+
     def set_image(self) -> None:
         """Loads the matches and optical image for the current index."""
         self.current_match_idx = 0
@@ -178,16 +212,14 @@ class MatchVisualizer:
             for row in reader:
                 self.matches.append(ImageHit.from_dict(row))
 
-        image_name = f"{self.matches[self.current_match_idx].pose.timestamp}.jpg"
-        img_path = self.dataset.image_dir / image_name
-        
         # Load optical image and ensure it's RGB
-        img = iio.imread(img_path)
-        if len(img.shape) == 2:
-            img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-        
-        # Downsample for performance if needed
-        self.image = img[::self.downsample_factor, ::self.downsample_factor]
+        img_name = self.images[self.current_img_idx].name.replace(".csv", ".jpg")
+        img_path = self.dataset.image_dir / img_name
+        self.image = cv2.imread(str(img_path), cv2.IMREAD_COLOR_RGB)
+
+        if self.camera_frame is not None:
+            self.camera_frame.remove()
+            self.camera_frame = None
 
     def draw_target(self, img_array: np.ndarray, u: int, v: int) -> np.ndarray:
         """Draws a highly visible red target on a copy of the image array."""
@@ -205,7 +237,7 @@ class MatchVisualizer:
             return
 
         hit = self.matches[self.current_match_idx]
-        self.current_pose = hit.pose
+        self.auv_pose = hit.pose
 
         # --- 1. Prepare Camera Image ---
         scaled_u = int(hit.u / self.downsample_factor)
@@ -220,7 +252,7 @@ class MatchVisualizer:
         bin_end = min(self.sss_image.shape[1], hit.bin_idx + half_patch)
 
         sss_patch = self.sss_image[ping_start:ping_end, bin_start:bin_end]
-        
+
         dot_x = hit.bin_idx - bin_start
         dot_y = hit.ping_idx - ping_start
         self.sss_patch_marked = self.draw_target(sss_patch, int(dot_x), int(dot_y))
@@ -228,9 +260,12 @@ class MatchVisualizer:
         # --- 3. Prepare 3D Point ---
         self.target_3d = np.array([[hit.p_x, hit.p_y, hit.p_z]]) - self.center_offset
 
+        image_pose = self.dataset.images[self.get_timestamp()].pose
+
         # Update text info
         markdown_text = (
             f"### Status\n"
+            f"**Timestamp:** {hit.pose.timestamp}\n\n"
             f"**Image:** {self.current_img_idx + 1} / {len(self.images)}\n\n"
             f"**Match:** {self.current_match_idx + 1} / {len(self.matches)}\n\n"
             f"---\n"
@@ -238,7 +273,10 @@ class MatchVisualizer:
             f"**Sonar Ping:** {hit.ping_idx}\n\n"
             f"**Sonar Bin:** {hit.bin_idx}\n\n"
             f"**Distance:** {hit.distance:.2f}m\n\n"
-            f"**Incidence Angle:** {hit.incidence_angle:.2f} rad"
+            f"**Incidence Angle:** {hit.incidence_angle:.2f} rad\n\n"
+            f"**Camera Pose (NED):** ({image_pose.x:.2f}, {image_pose.y:.2f}, {image_pose.z:.2f}) m\n\n"
+            f"**AUV Pose (NED):** ({hit.pose.x:.2f}, {hit.pose.y:.2f}, {hit.pose.z:.2f}) m\n\n"
+            f"**3D Point (NED):** ({hit.p_x:.2f}, {hit.p_y:.2f}, {hit.p_z:.2f}) m\n\n"
         )
         self.gui_info.content = markdown_text
 
@@ -264,7 +302,7 @@ class MatchVisualizer:
             name="/views/sss_patch",
             image=self.sss_patch_marked,
             render_width=self.gui_sss_scale.value,
-            render_height=self.gui_sss_scale.value * self.sss_patch_marked.shape[0] / self.sss_patch_marked.shape[1],
+            render_height=self.gui_sss_scale.value,
             position=self.gui_sss_pos.value,
         )
 
@@ -278,16 +316,16 @@ class MatchVisualizer:
             )
 
         # Draw AUV Pose
-        if self.current_pose is not None:
+        if self.auv_pose is not None:
             # Shift AUV position by the same offset applied to the point cloud
-            auv_pos = self.current_pose.get_position() - self.center_offset
+            auv_pos = self.auv_pose.get_position() - self.center_offset
             
             # Viser expects quaternion in w, x, y, z format
             auv_wxyz = (
-                self.current_pose.qw,
-                self.current_pose.qx,
-                self.current_pose.qy,
-                self.current_pose.qz
+                self.auv_pose.qw,
+                self.auv_pose.qx,
+                self.auv_pose.qy,
+                self.auv_pose.qz
             )
 
             # Draw coordinate axes (Red=X, Green=Y, Blue=Z)
@@ -298,6 +336,38 @@ class MatchVisualizer:
                 axes_length=self.gui_auv_scale.value,
                 axes_radius=self.gui_auv_scale.value * 0.05,
             )
+
+        # Draw Camera Pose
+        if self.camera_poses is not None and self.camera_frame is None:
+            ts = self.get_timestamp()
+            qvec, tvec = self.camera_poses[ts]
+
+            T_world_camera = vtf.SE3.from_rotation_and_translation(
+                vtf.SO3(qvec), tvec
+            ).inverse()
+            self.camera_frame = self.server.scene.add_frame(
+                f"/colmap/frame_{ts}",
+                wxyz=T_world_camera.rotation().wxyz,
+                position=T_world_camera.translation() - self.center_offset,
+                axes_length=0.1,
+                axes_radius=0.005,
+            )
+
+            H, W = self.camera.height, self.camera.width
+            fy = self.camera.params[1]
+            frustum = self.server.scene.add_camera_frustum(
+                f"/colmap/frame_{ts}/frustum",
+                fov=2 * np.arctan2(H / 2, fy),
+                aspect=W / H,
+                scale=1.0,
+                image=self.cam_img_marked,
+            )
+
+            @frustum.on_click
+            def _(_, frame=self.camera_frame) -> None:
+                for client in self.server.get_clients().values():
+                    client.camera.wxyz = frame.wxyz
+                    client.camera.position = frame.position
 
     def run(self):
         """Keeps the server running."""

@@ -11,6 +11,7 @@ def process_optical_sidescan_matches(
     sss_poses: Dict[int, Pose],
     optical: np.ndarray,
     points: np.ndarray,
+    sonar_offset: np.ndarray
 ) -> List[ImageHit]:
     matches = []
     for s_ts in sss_poses.keys():
@@ -20,7 +21,7 @@ def process_optical_sidescan_matches(
         is_valid = get_intersections(sss_pose, points)
 
         dists = get_distances(sss_pose, points[is_valid])
-        is_valid[is_valid] = dists <= sss.slant_range
+        is_valid[is_valid] = dists < sss.slant_range
 
         if not np.any(is_valid):
             continue
@@ -36,10 +37,14 @@ def process_optical_sidescan_matches(
         bins = sss.num_samples + np.power(-1, 1 - channels) * bins
         bins = np.round(bins).astype(int)
 
-        sss_pose.timestamp = pose.timestamp  # Set the timestamp to be the same as the image for easier matching later
         for i in range(len(distances)):
+            offset = np.power(-1, 1 - channels[i]) * np.array(sonar_offset)
             matches.append(ImageHit(
-                pose=sss_pose,
+                pose=Pose(
+                    timestamp=pose.timestamp,  # Use the optical image timestamp
+                    x=sss_pose.x, y=sss_pose.y, z=sss_pose.z,
+                    qw=sss_pose.qw, qx=sss_pose.qx, qy=sss_pose.qy, qz=sss_pose.qz
+                ).translate(offset),
                 u=o_inters[i, 0],
                 v=o_inters[i, 1],
                 p_x=p_inters[i, 0],

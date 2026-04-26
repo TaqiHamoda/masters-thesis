@@ -12,8 +12,9 @@ topics:
   nav_topic: "/girona1000/navigator/navigation"
 
 extrinsics:
-  sonar:  [0.40, 0.00, 0.45]          # Translation from base to sonar in meters (x, y, z)
-  camera: [0.50, 0.00, 0.72]          # Translation from base to camera in meters (x, y, z)
+  sonar_offset: [0.00, 0.10, 0.00]    # Translation from sonar center to transducer in meters (x, y, z)
+  sonar:        [0.40, 0.00, 0.45]    # Translation from base to sonar in meters (x, y, z)
+  camera:       [0.50, 0.00, 0.72]    # Translation from base to camera in meters (x, y, z)
 
 photogrammetry:
   enabled: false                      # Whether to run photogrammetry reconstruction (Default: false)
@@ -38,7 +39,7 @@ photogrammetry:
 
   mesh:
     mesh_depth: 12                    # Depth parameter for Poisson surface resolution (Default: 8)
-    reduce_perc: 90.0                 # Percentage of faces to keep when simplifying the mesh (Default: 90.0)
+    reduce_perc: 0.80                 # Percentage of faces to keep when simplifying the mesh (Default: 0.90)
     tex_size: 32768                   # Texture size for UV mapping (Default: 1024)
 
 process_acoustic:                     # Generates an XTF and a PNG using the SSS data

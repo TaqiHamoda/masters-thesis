@@ -34,7 +34,7 @@ class Photogrammetry:
 
     @staticmethod
     def get_reconstruction(dataset: Dataset) -> pycolmap.Reconstruction:
-        return pycolmap.Reconstruction(Photogrammetry(dataset).sparse_path)
+        return pycolmap.Reconstruction(Photogrammetry(dataset).sparse_path / '0')
 
     def extract_and_match_features(self,
         contrast_threshold: float = 0.002,
@@ -169,7 +169,7 @@ class Photogrammetry:
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#meshing_decimation_quadric_edge_collapse
         ms.apply_filter(
             'meshing_decimation_quadric_edge_collapse',
-            targetperc=pymeshlab.PercentageValue(reduce_perc),
+            targetperc=reduce_perc,
             preservenormal=True,
             preservetopology=True
         )

@@ -15,19 +15,19 @@ class Pose(Datatype):
         x: float,
         y: float,
         z: float,
-        qw: float,
         qx: float,
         qy: float,
-        qz: float
+        qz: float,
+        qw: float,
     ):
         self.timestamp = timestamp
         self.x = x
         self.y = y
         self.z = z
-        self.qw = qw
         self.qx = qx
         self.qy = qy
         self.qz = qz
+        self.qw = qw
 
     def get_position(self) -> np.ndarray:
         return np.array((self.x, self.y, self.z))
@@ -43,16 +43,16 @@ class Pose(Datatype):
 
     def rotate(self, quat: np.ndarray) -> Self:
         """Expects a quaternion in [x, y, z, w] format. Rotates the pose by the given quaternion and returns a new Pose."""
-        new_quat = R.from_quat(self.get_quaternion()) * R.from_quat(quat)
+        new_quat = (R.from_quat(quat) * R.from_quat(self.get_quaternion())).as_quat()
         return Pose(
-            self.timestamp,
-            self.x,
-            self.y,
-            self.z,
-            qw=new_quat.as_quat()[3],
-            qx=new_quat.as_quat()[0],
-            qy=new_quat.as_quat()[1],
-            qz=new_quat.as_quat()[2]
+            timestamp=self.timestamp,
+            x=self.x,
+            y=self.y,
+            z=self.z,
+            qx=new_quat[0],
+            qy=new_quat[1],
+            qz=new_quat[2],
+            qw=new_quat[3],
         )
 
     def translate(self, local_delta: np.ndarray) -> Self:
@@ -62,27 +62,27 @@ class Pose(Datatype):
         global_delta = body_R_ned @ local_delta
 
         return Pose(
-            self.timestamp,
-            self.x + global_delta[0],
-            self.y + global_delta[1],
-            self.z + global_delta[2],
-            self.qw,
-            self.qx,
-            self.qy,
-            self.qz
+            timestamp=self.timestamp,
+            x=self.x + global_delta[0],
+            y=self.y + global_delta[1],
+            z=self.z + global_delta[2],
+            qx=self.qx,
+            qy=self.qy,
+            qz=self.qz,
+            qw=self.qw,
         )
-    
+
     @staticmethod
     def from_pycolmap(timestamp: int, rigid3d: pycolmap.Rigid3d) -> Self:
         return Pose(
-            timestamp,
+            timestamp=timestamp,
+            x=rigid3d.params[4],
+            y=rigid3d.params[5],
+            z=rigid3d.params[6],
             qx=rigid3d.params[0],
             qy=rigid3d.params[1],
             qz=rigid3d.params[2],
             qw=rigid3d.params[3],
-            x=rigid3d.params[4],
-            y=rigid3d.params[5],
-            z=rigid3d.params[6],
         )
 
     def to_pycolmap(self) -> pycolmap.Rigid3d:
@@ -94,14 +94,14 @@ class Pose(Datatype):
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> Self:
         return Pose(
-            int(data["timestamp"]),
-            float(data["x"]),
-            float(data["y"]),
-            float(data["z"]),
-            float(data["qw"]),
-            float(data["qx"]),
-            float(data["qy"]),
-            float(data["qz"])
+            timestamp=int(data["timestamp"]),
+            x=float(data["x"]),
+            y=float(data["y"]),
+            z=float(data["z"]),
+            qx=float(data["qx"]),
+            qy=float(data["qy"]),
+            qz=float(data["qz"]),
+            qw=float(data["qw"]),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -110,8 +110,8 @@ class Pose(Datatype):
             "x": self.x,
             "y": self.y,
             "z": self.z,
-            "qw": self.qw,
             "qx": self.qx,
             "qy": self.qy,
-            "qz": self.qz
+            "qz": self.qz,
+            "qw": self.qw,
         }
