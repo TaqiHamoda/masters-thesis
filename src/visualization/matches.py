@@ -61,7 +61,7 @@ class MatchVisualizer:
 
     def _load_point_cloud(self):
         """Loads and displays the sparse point cloud in the 3D scene."""
-        colmap_path = Photogrammetry(self.dataset).sparse_path
+        colmap_path = Photogrammetry(self.dataset).sparse_path / "0"
         points3d = read_points3d_binary(colmap_path / "points3D.bin")
         cameras = read_cameras_binary(colmap_path / "cameras.bin")
         images = read_images_binary(colmap_path / "images.bin")

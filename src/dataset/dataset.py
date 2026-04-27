@@ -48,6 +48,9 @@ class Dataset:
         self.matches_dir = self.output_path / "matches"
         self.matches_dir.mkdir(parents=True, exist_ok=True)
 
+        self.vertices_dir = self.output_path / "vertices"
+        self.vertices_dir.mkdir(parents=True, exist_ok=True)
+
         self.img_topic = img_topic
         self.odo_topic = odo_topic
         self.info_topic = info_topic

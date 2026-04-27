@@ -115,19 +115,6 @@ def get_image_geometry(reconstruction: pycolmap.Reconstruction, img_id: int) -> 
     return np.array(points_2d), np.array(points_3d)
 
 
-def get_distances(pose: Pose, points: np.ndarray) -> np.ndarray:
-    """
-    Parameters:
-        pose: AUV pose object
-        points: np.ndarray that is nx3
-
-    Returns:
-        np.ndarray: An nx1 numpy array where each element is the distance in meters.
-    """
-
-    return np.linalg.norm(points - pose.get_position(), axis=1)
-
-
 def get_intersections(pose: Pose, points: np.ndarray, n_local: np.ndarray = np.array([1.0, 0.0, 0.0]), thickness: float = 0.01):
     """
     Parameters:
@@ -148,6 +135,19 @@ def get_intersections(pose: Pose, points: np.ndarray, n_local: np.ndarray = np.a
     # shortest distance to the plane
     distance = np.dot(plane_normal, (points - plane_pos).T).T
     return np.abs(distance) <= thickness / 2.0
+
+
+def get_distances(pose: Pose, points: np.ndarray) -> np.ndarray:
+    """
+    Parameters:
+        pose: AUV pose object
+        points: np.ndarray that is nx3
+
+    Returns:
+        np.ndarray: An nx1 numpy array where each element is the distance in meters.
+    """
+
+    return np.linalg.norm(points - pose.get_position(), axis=1)
 
 
 def get_corresponding_channels(pose: Pose, points: np.ndarray) -> np.ndarray:

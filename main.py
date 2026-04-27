@@ -1,12 +1,10 @@
 import yaml
 from time import perf_counter, sleep
-from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
 
 from src.dataset import Dataset
 from src.photogrammetry import Photogrammetry
 from src.sonar import export_to_xtf, export_to_png
-from src.registration import interpolate_poses, get_image_geometry, process_optical_sidescan_matches
+from src.registration import Registration
 from src.visualization import MatchVisualizer
 
 
@@ -51,19 +49,6 @@ def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
         print(f"Mesh completed in {perf_counter() - start_time:.2f}s")
 
 
-def process_optical_single_image(img, reconstruction, dataset, poses, sonar_offset):
-    ts = int(img.name.replace(".jpg", ''))
-
-    matches_file = dataset.matches_dir / f"{ts}.csv"
-    if matches_file.exists():
-        return
-
-    optical, points = get_image_geometry(reconstruction, img.image_id)
-    matches = process_optical_sidescan_matches(dataset, poses[0][ts], poses[1], optical, points, sonar_offset)
-
-    Dataset.write_data(matches_file, matches)
-
-
 if __name__ == "__main__":
     # Load settings from the YAML file
     with open("config.yaml", 'r') as f:
@@ -75,7 +60,7 @@ if __name__ == "__main__":
     extrinsics_cfg = cfg['extrinsics']
     photogrammetry_cfg = cfg['photogrammetry']
     xtf_cfg = cfg['process_acoustic']
-    optical_cfg = cfg['optical_registration']
+    registration_cfg = cfg['registration']
     visual_cfg = cfg['visualizations']
 
     dataset = Dataset(
@@ -113,22 +98,17 @@ if __name__ == "__main__":
             print("Processing Sonar Data into PNG file...")
             export_to_png(dataset, xtf_cfg['sample_dtype'])
 
-    if optical_cfg['enabled']:
+    if registration_cfg['enabled']:
         print("Performing optical registration...")
+        registration = Registration(
+            dataset,
+            sonar_offset=extrinsics_cfg['sonar_offset'],
+            thickness=registration_cfg['plane_thickness'],
+            n_local=registration_cfg['normal_vector'],
+            num_threads=registration_cfg['num_threads'],
+        )
+        # registration.save_matches()
+        registration.save_vertices()
 
-        reconstruction = Photogrammetry.get_reconstruction(dataset)
-        interpolated_poses = interpolate_poses(dataset, reconstruction)
-
-        with ThreadPoolExecutor(max_workers=6) as executor:
-            images = list(reconstruction.images.values())
-
-            list(tqdm(
-                executor.map(
-                    lambda img: process_optical_single_image(img, reconstruction, dataset, interpolated_poses, extrinsics_cfg['sonar_offset']),
-                    images
-                ),
-                total=len(images),
-            ))
-
-    if visual_cfg['optical_registration']:
+    if visual_cfg['optical_matching']:
         MatchVisualizer(dataset).run()

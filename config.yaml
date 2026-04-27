@@ -47,9 +47,13 @@ process_acoustic:                     # Generates an XTF and a PNG using the SSS
   sonar_name: "ARC Scout Mk II"       # Name of the sonar for labeling outputs
   sample_dtype: uint16                # The sample datatype used (options: uint8, uint16, uint32, float32)
 
-optical_registration:                 # Requires the sparse photogrammetry reconstruction to be completed
-  enabled: false
+registration:
+  enabled: false                       # Perform cross-modal registration between sonar hits and optical images
+  num_threads: 1                      # Number of threads to use for parallel processing (Default: 6)
+  plane_thickness: 0.10               # Thickness of the plane in meters for matching sonar hits to photogrammetry points (Default: 0.10)
+  normal_vector: [1.0, 0.0, 0.0]      # Normal vector of the plane for matching sonar hits to photogrammetry points
+                                      # Default assumes YZ plane fan (standard for Side-Scan Sonar)
 
 visualizations:
-  sparse_pointcloud: false            # Enable sparse pointcloud visualization (Requires photogrammetry reconstruction)
-  optical_registration: true         # Enable optical registration visualization (Requires sonar png and optical matches)
+  optical_matching: true             # Enable optical registration visualization (Requires sonar png and optical matches)
+  reflectivity_decomposition: false   # Enable reflectivity decomposition visualization (Requires sonar png and reflectivity decomposition)
