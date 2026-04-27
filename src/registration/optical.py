@@ -2,7 +2,7 @@ import numpy as np
 from typing import List, Dict
 
 from .utils import get_distances, get_intersections, get_corresponding_channels, get_incidence_angles
-from ..dataset import Dataset, Pose, ImageHit
+from ..dataset import Dataset, Pose, AcousticHit, ImageHit
 
 
 def process_optical_sidescan_matches(
@@ -40,20 +40,22 @@ def process_optical_sidescan_matches(
         for i in range(len(distances)):
             offset = np.power(-1, 1 - channels[i]) * np.array(sonar_offset)
             matches.append(ImageHit(
-                pose=Pose(
-                    timestamp=pose.timestamp,  # Use the optical image timestamp
-                    x=sss_pose.x, y=sss_pose.y, z=sss_pose.z,
-                    qw=sss_pose.qw, qx=sss_pose.qx, qy=sss_pose.qy, qz=sss_pose.qz
-                ).translate(offset),
+                hit=AcousticHit(
+                    pose=Pose(
+                        timestamp=pose.timestamp,  # Use the optical image timestamp
+                        x=sss_pose.x, y=sss_pose.y, z=sss_pose.z,
+                        qw=sss_pose.qw, qx=sss_pose.qx, qy=sss_pose.qy, qz=sss_pose.qz
+                    ).translate(offset),
+                    ping_idx=sss.ping_idx,
+                    bin_idx=bins[i],
+                    distance=distances[i],
+                    incidence_angle=incidence_angles[i]
+                ),
                 u=o_inters[i, 0],
                 v=o_inters[i, 1],
                 p_x=p_inters[i, 0],
                 p_y=p_inters[i, 1],
                 p_z=p_inters[i, 2],
-                ping_idx=sss.ping_idx,
-                bin_idx=bins[i],
-                distance=distances[i],
-                incidence_angle=incidence_angles[i]
             ))
 
     return matches

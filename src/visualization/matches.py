@@ -236,47 +236,47 @@ class MatchVisualizer:
             self.gui_info.content = f"### Image {self.current_img_idx}\nNo matches found."
             return
 
-        hit = self.matches[self.current_match_idx]
-        self.auv_pose = hit.pose
+        match = self.matches[self.current_match_idx]
+        self.auv_pose = match.hit.pose
 
         # --- 1. Prepare Camera Image ---
-        scaled_u = int(hit.u / self.downsample_factor)
-        scaled_v = int(hit.v / self.downsample_factor)
+        scaled_u = int(match.u / self.downsample_factor)
+        scaled_v = int(match.v / self.downsample_factor)
         self.cam_img_marked = self.draw_target(self.image, scaled_u, scaled_v)
 
         # --- 2. Prepare SSS Patch ---
         half_patch = self.patch_size // 2
-        ping_start = max(0, hit.ping_idx - half_patch)
-        ping_end = min(self.sss_image.shape[0], hit.ping_idx + half_patch)
-        bin_start = max(0, hit.bin_idx - half_patch)
-        bin_end = min(self.sss_image.shape[1], hit.bin_idx + half_patch)
+        ping_start = max(0, match.hit.ping_idx - half_patch)
+        ping_end = min(self.sss_image.shape[0], match.hit.ping_idx + half_patch)
+        bin_start = max(0, match.hit.bin_idx - half_patch)
+        bin_end = min(self.sss_image.shape[1], match.hit.bin_idx + half_patch)
 
         sss_patch = self.sss_image[ping_start:ping_end, bin_start:bin_end]
 
-        dot_x = hit.bin_idx - bin_start
-        dot_y = hit.ping_idx - ping_start
+        dot_x = match.hit.bin_idx - bin_start
+        dot_y = match.hit.ping_idx - ping_start
         self.sss_patch_marked = self.draw_target(sss_patch, int(dot_x), int(dot_y))
 
         # --- 3. Prepare 3D Point ---
-        self.target_3d = np.array([[hit.p_x, hit.p_y, hit.p_z]]) - self.center_offset
+        self.target_3d = np.array([[match.p_x, match.p_y, match.p_z]]) - self.center_offset
 
         image_pose = self.dataset.images[self.get_timestamp()].pose
 
         # Update text info
         markdown_text = (
             f"### Status\n"
-            f"**Timestamp:** {hit.pose.timestamp}\n\n"
+            f"**Timestamp:** {match.hit.pose.timestamp}\n\n"
             f"**Image:** {self.current_img_idx + 1} / {len(self.images)}\n\n"
             f"**Match:** {self.current_match_idx + 1} / {len(self.matches)}\n\n"
             f"---\n"
-            f"**Optical Pixel (u, v):** ({hit.u}, {hit.v})\n\n"
-            f"**Sonar Ping:** {hit.ping_idx}\n\n"
-            f"**Sonar Bin:** {hit.bin_idx}\n\n"
-            f"**Distance:** {hit.distance:.2f}m\n\n"
-            f"**Incidence Angle:** {hit.incidence_angle:.2f} rad\n\n"
+            f"**Optical Pixel (u, v):** ({match.u}, {match.v})\n\n"
+            f"**Sonar Ping:** {match.hit.ping_idx}\n\n"
+            f"**Sonar Bin:** {match.hit.bin_idx}\n\n"
+            f"**Distance:** {match.hit.distance:.2f}m\n\n"
+            f"**Incidence Angle:** {match.hit.incidence_angle:.2f} rad\n\n"
             f"**Camera Pose (NED):** ({image_pose.x:.2f}, {image_pose.y:.2f}, {image_pose.z:.2f}) m\n\n"
-            f"**AUV Pose (NED):** ({hit.pose.x:.2f}, {hit.pose.y:.2f}, {hit.pose.z:.2f}) m\n\n"
-            f"**3D Point (NED):** ({hit.p_x:.2f}, {hit.p_y:.2f}, {hit.p_z:.2f}) m\n\n"
+            f"**AUV Pose (NED):** ({match.hit.pose.x:.2f}, {match.hit.pose.y:.2f}, {match.hit.pose.z:.2f}) m\n\n"
+            f"**3D Point (NED):** ({match.p_x:.2f}, {match.p_y:.2f}, {match.p_z:.2f}) m\n\n"
         )
         self.gui_info.content = markdown_text
 
