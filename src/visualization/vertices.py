@@ -4,7 +4,6 @@ import open3d as o3d
 
 import viser
 
-import csv
 import time
 from typing import List
 
@@ -191,10 +190,7 @@ class VertexVisualizer:
         self.current_vertex_idx = 0
         self.vertices.clear()
 
-        with open(self.scans[self.current_scan_idx], 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                self.vertices.append(VertexHit.from_dict(row))
+        self.vertices.extend(VertexHit.from_csv(self.scans[self.current_scan_idx]).values())
 
     def draw_target(self, img_array: np.ndarray, u: int, v: int) -> np.ndarray:
         """Draws a highly visible red target on a copy of the image array."""

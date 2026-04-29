@@ -1,4 +1,5 @@
-from typing import Self, Dict, Any
+from pathlib import Path
+from typing import Self, List, Dict, Any
 
 from .datatype import Datatype
 from .pose import Pose
@@ -41,3 +42,7 @@ class Image(Datatype):
             "cx": self.cx,
             "cy": self.cy
         }
+
+    @staticmethod
+    def from_csv(csv_file: str | Path) -> List[Self]:
+        return Datatype._from_csv(csv_file, Image.from_dict)

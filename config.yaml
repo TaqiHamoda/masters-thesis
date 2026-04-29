@@ -48,18 +48,18 @@ process_acoustic:                     # Generates an XTF and a PNG using the SSS
   sample_dtype: uint16                # The sample datatype used (options: uint8, uint16, uint32, float32)
 
 registration:
-  enabled: true                       # Perform cross-modal registration between sonar hits and optical images
+  enabled: false                       # Perform cross-modal registration between sonar hits and optical images
   num_threads: 6                      # Number of threads to use for parallel processing (Default: 6)
   plane_thickness: 0.01               # Thickness of the plane in meters for matching sonar hits to photogrammetry points (Default: 0.01)
   normal_vector: [1.0, 0.0, 0.0]      # Normal vector of the plane for matching sonar hits to photogrammetry points
                                       # Default assumes YZ plane fan (standard for Side-Scan Sonar)
 
 decomposition:
-  enabled: true                       # Perform reflectivity decomposition of the sonar data
+  enabled: false                       # Perform reflectivity decomposition of the sonar data
   lower_percentile: 1                # Lower percentile for reflectivity clipping in reflectivity image (Default: 1)
   upper_percentile: 99                # Upper percentile for reflectivity clipping in reflectivity image (Default: 99)
 
 visualizations:
-  optical_matching: false             # Enable optical registration visualization (Requires sonar png and optical matches)
+  optical_matching: true             # Enable optical registration visualization (Requires sonar png and optical matches)
   vertex_matching: false              # Enable vertex registration visualization (Requires sonar png and vertex matches)
   reflectivity_decomposition: false   # Enable reflectivity decomposition visualization (Requires sonar png and reflectivity decomposition)

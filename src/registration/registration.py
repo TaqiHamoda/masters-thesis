@@ -194,15 +194,12 @@ class Registration:
         Dataset.write_data(vertices_file, hits)
 
     def save_matches(self) -> None:
-        images = list(self.reconstruction.images.values())
+        images_ts = list(self.img_ids.values())
 
         with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
             list(tqdm(
-                executor.map(
-                    lambda img: self._save_matches(int(img.name.replace(".jpg", ''))),
-                    images
-                ),
-                total=len(images),
+                executor.map(self._save_matches, images_ts),
+                total=len(images_ts),
                 desc="Processing optical matches"
             ))
 
@@ -210,6 +207,5 @@ class Registration:
         self.load_mesh()
 
         sonars = list(self.sss_poses.keys())
-
         for ts in tqdm(sonars, desc="Processing vertex hits"):
             self._save_vertices(ts)

@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 
-import csv
 from pathlib import Path
 from typing import List, Tuple
 from tqdm import tqdm
@@ -20,13 +19,7 @@ class Decomposition:
         if not filepath.exists():
             return []
 
-        hits = []
-        with open(filepath, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                hits.append(VertexHit.from_dict(row))
-
-        return hits
+        return list(VertexHit.from_csv(filepath).values())
 
     def get_incidence_angle_map(self) -> Tuple[np.ndarray, np.ndarray]:
         angles = np.zeros_like(self.waterfall, dtype=np.float32)

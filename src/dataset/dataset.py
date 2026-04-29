@@ -114,17 +114,15 @@ class Dataset:
         self.typestore.register(add_types)
 
     def load_data_from_csv(self):
-        with open(self.cameras_csv, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                image = Image.from_dict(row)
-                self.images[image.pose.timestamp] = image
+        self.images = {
+            image.pose.timestamp: image
+            for image in Image.from_csv(self.cameras_csv)
+        }
 
-        with open(self.sonar_csv, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                sonar = SideScanSonar.from_dict(row)
-                self.sonar[sonar.navigation.pose.timestamp] = sonar
+        self.sonar = {
+            sss.navigation.pose.timestamp: sss
+            for sss in SideScanSonar.from_csv(self.sonar_csv)
+        }
 
     def load_data_from_bags(self):
         camera_params = None

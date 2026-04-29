@@ -1,4 +1,5 @@
-from typing import Self, Dict, Any
+from pathlib import Path
+from typing import Self, List, Dict, Any
 
 from .datatype import Datatype
 from .acoustic_hit import AcousticHit
@@ -25,3 +26,7 @@ class VertexHit(Datatype):
         return self.hit.to_dict() | {
             "vertex_idx": self.vertex_idx
         }
+
+    @staticmethod
+    def from_csv(csv_file: str | Path) -> List[Self]:
+        return Datatype._from_csv(csv_file, VertexHit.from_dict)

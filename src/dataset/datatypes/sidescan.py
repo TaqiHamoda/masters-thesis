@@ -1,4 +1,5 @@
-from typing import Self, Dict, Any
+from pathlib import Path
+from typing import Self, List, Dict, Any
 
 from .datatype import Datatype
 from .navigation import Navigation
@@ -48,3 +49,7 @@ class SideScanSonar(Datatype):
             "frequency": self.frequency,
             "speed_of_sound": self.speed_of_sound
         }
+
+    @staticmethod
+    def from_csv(csv_file: str | Path) -> List[Self]:
+        return Datatype._from_csv(csv_file, SideScanSonar.from_dict)

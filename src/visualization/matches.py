@@ -9,7 +9,6 @@ from viser.extras.colmap import (
     read_points3d_binary,
 )
 
-import csv
 import time
 from typing import List
 
@@ -223,10 +222,7 @@ class MatchVisualizer:
         self.current_match_idx = 0
         self.matches.clear()
 
-        with open(self.images[self.current_img_idx], 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                self.matches.append(ImageHit.from_dict(row))
+        self.matches.extend(ImageHit.from_csv(self.images[self.current_img_idx]))
 
         # Load optical image and ensure it's RGB
         img_name = self.images[self.current_img_idx].name.replace(".csv", ".jpg")

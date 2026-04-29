@@ -1,4 +1,5 @@
-from typing import Self, Dict, Any
+from pathlib import Path
+from typing import Self, List, Dict, Any
 
 from .datatype import Datatype
 from .acoustic_hit import AcousticHit
@@ -29,3 +30,7 @@ class ImageHit(Datatype):
             "u": self.u,
             "v": self.v
         }
+
+    @staticmethod
+    def from_csv(csv_file: str | Path) -> List[Self]:
+        return Datatype._from_csv(csv_file, ImageHit.from_dict)
