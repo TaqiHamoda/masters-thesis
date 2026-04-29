@@ -40,7 +40,7 @@ class Registration:
         }
 
         # The RaycastingScene requires Open3D's Tensor-based mesh, so we convert the legacy mesh
-        self.mesh = o3d.io.read_triangle_mesh(str(Photogrammetry(self.dataset).mesh_ply))
+        self.mesh = o3d.io.read_triangle_mesh(str(self.dataset.mesh_ply))
         self.mesh = o3d.t.geometry.TriangleMesh.from_legacy(self.mesh)
 
         self.scene = o3d.t.geometry.RaycastingScene()
@@ -52,7 +52,7 @@ class Registration:
         sss: SideScanSonar,
         points: np.ndarray,
         raytrace: bool = False,
-        eps: float = 1e-4
+        eps: float = 1e-1
     ) -> np.ndarray:
         """
         Raytraces from triangle centroids towards the transducer to check for collisions.
@@ -71,7 +71,7 @@ class Registration:
 
         origins = points[inters]
         vs_ned = pose.get_position() - origins
-        distances = np.linalg.norm(vs_ned, axis=1)
+        distances = np.linalg.norm(vs_ned, axis=1, keepdims=True)
 
         directions = vs_ned / (distances + eps)
         origins_offset = origins + (directions * eps)
@@ -79,7 +79,7 @@ class Registration:
         rays = np.hstack((origins_offset, directions)).astype(np.float32)
         rays_t = o3d.core.Tensor(rays)
 
-        if o3d.cuda.is_available():
+        if o3d.core.cuda.is_available():
             rays_t = rays_t.cuda(0)
 
         ans = self.scene.cast_rays(rays_t)
@@ -87,29 +87,30 @@ class Registration:
 
         # A collision occurs if the ray hits the mesh BEFORE it reaches the transducer.
         # We subtract epsilon from the target distance because we pushed the origin forward.
-        inters[inters] = hit_distances < distances - eps
+        inters[inters] = hit_distances >= distances.reshape(-1) - eps
         return np.flatnonzero(inters)
-    
+
     def get_hits(self, sss: SideScanSonar, points: np.ndarray) -> List[AcousticHit]:
         pose = self.sss_poses[sss.navigation.pose.timestamp]
 
-        distances = get_distances(pose, points)
         channels = get_corresponding_channels(pose, points)
-        incidence_angles = get_incidence_angles(pose, points)
+        offsets = np.power(-1, 1 - channels.reshape(-1, 1)) * self.sonar_offset
+        offsets = (pose.get_rotation_matrix() @ offsets.T).T  # Transform offsets to world frame
+
+        distances = get_distances(pose, points - offsets)
+        incidence_angles = get_incidence_angles(pose, points - offsets)
 
         bins = sss.num_samples * distances / sss.slant_range
         bins = sss.num_samples + np.power(-1, 1 - channels) * bins
         bins = np.round(bins).astype(int)
 
-        offsets = np.power(-1, 1 - channels.reshape(-1, 1)) * self.sonar_offset
-
         return [
             AcousticHit(
                 pose=Pose(
                     timestamp=pose.timestamp,
-                    x=pose.x, y=pose.y, z=pose.z,
+                    x=pose.x + offsets[i, 0], y=pose.y + offsets[i, 1], z=pose.z + offsets[i, 2],
                     qw=pose.qw, qx=pose.qx, qy=pose.qy, qz=pose.qz
-                ).translate(offsets[i]),
+                ),
                 ping_idx=sss.ping_idx,
                 bin_idx=bins[i],
                 distance=distances[i],
@@ -159,9 +160,9 @@ class Registration:
             VertexHit(
                 hit=hits[i],
                 vertex_idx=is_valid[i],
-                v_x=vertices[i, 0],
-                v_y=vertices[i, 1],
-                v_z=vertices[i, 2],
+                p_x=vertices[i, 0],
+                p_y=vertices[i, 1],
+                p_z=vertices[i, 2],
             )
             for i in range(len(hits))
         ]
@@ -175,6 +176,8 @@ class Registration:
 
         pose = self.cam_poses[ts]
         matches = self.get_matches(pose)
+        if len(matches) == 0:
+            return
 
         Dataset.write_data(matches_file, matches)
 
@@ -185,6 +188,8 @@ class Registration:
 
         sss = self.dataset.sonar[s_ts]
         hits = self.get_vertices(sss)
+        if len(hits) == 0:
+            return
 
         Dataset.write_data(vertices_file, hits)
 
@@ -198,18 +203,11 @@ class Registration:
                     images
                 ),
                 total=len(images),
-                desc="Processing optical matches."
+                desc="Processing optical matches"
             ))
 
     def save_vertices(self) -> None:
-        sonars = list(self.dataset.sonar.values())
+        sonars = list(self.sss_poses.keys())
 
-        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-            list(tqdm(
-                executor.map(
-                    lambda sss: self._save_vertices(sss.navigation.pose.timestamp),
-                    sonars
-                ),
-                total=len(sonars),
-                desc="Processing mesh vertices."
-            ))
+        for ts in tqdm(sonars, desc="Processing vertex hits"):
+            self._save_vertices(ts)

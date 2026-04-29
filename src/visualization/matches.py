@@ -1,9 +1,6 @@
-import csv
-import time
-from typing import List
-
 import cv2
 import numpy as np
+
 import viser
 import viser.transforms as vtf
 from viser.extras.colmap import (
@@ -11,6 +8,10 @@ from viser.extras.colmap import (
     read_images_binary,
     read_points3d_binary,
 )
+
+import csv
+import time
+from typing import List
 
 from ..dataset import Dataset, ImageHit
 from ..photogrammetry import Photogrammetry
@@ -21,6 +22,9 @@ class MatchVisualizer:
         """
         Initializes the Viser-based visualization tool.
         """
+        self.camera_pos = np.array((50.31622641, 5.14074192, -109.29152408))
+        self.camera_wxyz = np.array((0.999994465, -4.99997233e-07, -1.66354234e-09, 0.00332708463))
+
         self.dataset = dataset
         self.patch_size = patch_size
         self.downsample_factor = downsample_factor
@@ -33,7 +37,7 @@ class MatchVisualizer:
 
         # Start Viser server
         self.server = viser.ViserServer()
-        self.server.gui.configure_theme(titlebar_content=None, control_layout="collapsible")
+        self.server.gui.configure_theme(titlebar_content=None, control_layout="collapsible", dark_mode=True)
 
         # Load SSS waterfall (convert to RGB so we can draw a red dot on it)
         self.sss_image = cv2.imread(str(dataset.sonar_png), cv2.IMREAD_COLOR_RGB)
@@ -89,6 +93,11 @@ class MatchVisualizer:
     def _build_gui(self):
         """Creates the side-panel buttons and info displays."""
         self.gui_info = self.server.gui.add_markdown("Loading data...")
+
+        # View Controls
+        folder_view = self.server.gui.add_folder("View Controls")
+        with folder_view:
+            btn_reset_view = self.server.gui.add_button("Reset View")
 
         # Image Controls
         folder_img = self.server.gui.add_folder("Image Navigation")
@@ -179,6 +188,13 @@ class MatchVisualizer:
         def _(_) -> None:
             self.current_match_idx = min(len(self.matches) - 1, self.current_match_idx + 100)
             self.update_view()
+
+        # --- Callbacks: View ---
+        @btn_reset_view.on_click
+        def _(_) -> None:
+            for client in self.server.get_clients().values():
+                client.camera.wxyz = self.camera_wxyz
+                client.camera.position = self.camera_pos
 
         # --- Callbacks: Display Settings ---
         # When display settings change, we only redraw the scene using existing arrays

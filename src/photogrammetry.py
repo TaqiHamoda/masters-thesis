@@ -29,9 +29,6 @@ class Photogrammetry:
         self.stereo_path = self.workspace_path / "stereo"
         self.fused_ply = self.workspace_path / "fused.ply"
 
-        self.mesh_path = self.output_dir / "mesh"
-        self.mesh_ply = self.mesh_path / "mesh.ply"
-
     @staticmethod
     def get_reconstruction(dataset: Dataset) -> pycolmap.Reconstruction:
         return pycolmap.Reconstruction(Photogrammetry(dataset).sparse_path / '0')
@@ -155,8 +152,6 @@ class Photogrammetry:
         if not self.fused_ply.exists():
             raise ValueError("Dense reconstruction outputs not found. Please run dense reconstruction before meshing.")
 
-        self.mesh_path.mkdir(exist_ok=True)
-
         ms = pymeshlab.MeshSet()
         ms.load_new_mesh(str(self.fused_ply))
 
@@ -187,7 +182,7 @@ class Photogrammetry:
             textw=tex_size, texth=tex_size
         )
 
-        ms.save_current_mesh(str(self.mesh_ply))
+        ms.save_current_mesh(str(self.dataset.mesh_ply))
 
     @staticmethod
     def has_cuda() -> bool:

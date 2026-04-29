@@ -5,7 +5,8 @@ from src.dataset import Dataset
 from src.photogrammetry import Photogrammetry
 from src.sonar import export_to_xtf, export_to_png
 from src.registration import Registration
-from src.visualization import MatchVisualizer
+from src.decomposition import Decomposition
+from src.visualization import MatchVisualizer, VertexVisualizer
 
 
 def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
@@ -61,6 +62,7 @@ if __name__ == "__main__":
     photogrammetry_cfg = cfg['photogrammetry']
     xtf_cfg = cfg['process_acoustic']
     registration_cfg = cfg['registration']
+    decomposition_cfg = cfg['decomposition']
     visual_cfg = cfg['visualizations']
 
     dataset = Dataset(
@@ -107,8 +109,23 @@ if __name__ == "__main__":
             n_local=registration_cfg['normal_vector'],
             num_threads=registration_cfg['num_threads'],
         )
-        # registration.save_matches()
+        registration.save_matches()
         registration.save_vertices()
+
+    if decomposition_cfg['enabled']:
+        decomposition = Decomposition(dataset)
+        if not dataset.sonar_angles.exists() or not dataset.sonar_reflectivity.exists():
+            print("Performing component decomposition...")
+            decomposition.process_decomposition()
+
+        print("Saving reflectivity image...")
+        decomposition.save_reflectivity_image(
+            lower=decomposition_cfg['lower_percentile'],
+            upper=decomposition_cfg['upper_percentile']
+        )
 
     if visual_cfg['optical_matching']:
         MatchVisualizer(dataset).run()
+
+    if visual_cfg['vertex_matching']:
+        VertexVisualizer(dataset).run()

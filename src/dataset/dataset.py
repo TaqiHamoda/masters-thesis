@@ -38,9 +38,22 @@ class Dataset:
 
         self.cameras_csv = self.output_path / "camera_poses.csv"
         self.sonar_csv = self.output_path / "sonar_poses.csv"
-        self.sonar_file = self.output_path / "sonar.npz"
-        self.sonar_xtf = self.output_path / "sonar.xtf"
-        self.sonar_png = self.output_path / "sonar.png"
+
+        self.sonar_dir = self.output_path / "sonar"
+        self.sonar_dir.mkdir(parents=True, exist_ok=True)
+
+        self.sonar_file = self.sonar_dir / "sonar.npz"
+        self.sonar_xtf = self.sonar_dir / "sonar.xtf"
+        self.sonar_png = self.sonar_dir / "sonar.png"
+        self.sonar_angles = self.sonar_dir / "angles.npz"
+        self.sonar_reflectivity = self.sonar_dir / "reflectivity.npz"
+        self.reflectivity_png = self.sonar_dir / "reflectivity.png"
+
+        self.mesh_dir = self.output_path / "mesh"
+        self.mesh_dir.mkdir(parents=True, exist_ok=True)
+
+        self.mesh_ply = self.mesh_dir / "mesh.ply"
+        self.reflectivity_texture = self.mesh_dir / "reflectivity.png"
 
         self.image_dir = self.output_path / "images"
         self.image_dir.mkdir(parents=True, exist_ok=True)
