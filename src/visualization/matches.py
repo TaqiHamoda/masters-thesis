@@ -18,7 +18,7 @@ from ..photogrammetry import Photogrammetry
 
 
 class MatchVisualizer:
-    def __init__(self, dataset: Dataset, patch_size: int = 1000, downsample_factor: int = 1):
+    def __init__(self, dataset: Dataset, patch_size: int = 1000):
         """
         Initializes the Viser-based visualization tool.
         """
@@ -27,7 +27,6 @@ class MatchVisualizer:
 
         self.dataset = dataset
         self.patch_size = patch_size
-        self.downsample_factor = downsample_factor
 
         self.current_img_idx = 0
         self.current_match_idx = 0
@@ -52,6 +51,7 @@ class MatchVisualizer:
         self.camera = None
         self.camera_poses = None
         self.camera_frame = None
+        self.camera_frustum = None
 
         # Load Colmap Point Cloud
         self._load_point_cloud()
@@ -236,6 +236,7 @@ class MatchVisualizer:
         if self.camera_frame is not None:
             self.camera_frame.remove()
             self.camera_frame = None
+            self.camera_frustum = None  # When you remove camera_frame, the frustum is automatically removed by Viser
 
     def draw_target(self, img_array: np.ndarray, u: int, v: int) -> np.ndarray:
         """Draws a highly visible red target on a copy of the image array."""
@@ -256,9 +257,7 @@ class MatchVisualizer:
         self.auv_pose = match.hit.pose
 
         # --- 1. Prepare Camera Image ---
-        scaled_u = int(match.u / self.downsample_factor)
-        scaled_v = int(match.v / self.downsample_factor)
-        self.cam_img_marked = self.draw_target(self.image, scaled_u, scaled_v)
+        self.cam_img_marked = self.draw_target(self.image, match.u, match.v)
 
         # --- 2. Prepare SSS Patch ---
         half_patch = self.patch_size // 2
@@ -274,7 +273,7 @@ class MatchVisualizer:
         self.sss_patch_marked = self.draw_target(sss_patch, int(dot_x), int(dot_y))
 
         # --- 3. Prepare 3D Point ---
-        self.target_3d = np.array([[match.p_x, match.p_y, match.p_z]]) - self.center_offset
+        self.target_3d = np.array([[match.hit.p_x, match.hit.p_y, match.hit.p_z]]) - self.center_offset
 
         image_pose = self.dataset.images[self.get_timestamp()].pose
 
@@ -292,7 +291,7 @@ class MatchVisualizer:
             f"**Incidence Angle:** {match.hit.incidence_angle:.2f} rad\n\n"
             f"**Camera Pose (NED):** ({image_pose.x:.2f}, {image_pose.y:.2f}, {image_pose.z:.2f}) m\n\n"
             f"**AUV Pose (NED):** ({match.hit.pose.x:.2f}, {match.hit.pose.y:.2f}, {match.hit.pose.z:.2f}) m\n\n"
-            f"**3D Point (NED):** ({match.p_x:.2f}, {match.p_y:.2f}, {match.p_z:.2f}) m\n\n"
+            f"**3D Point (NED):** ({match.hit.p_x:.2f}, {match.hit.p_y:.2f}, {match.hit.p_z:.2f}) m\n\n"
         )
         self.gui_info.content = markdown_text
 
@@ -371,7 +370,7 @@ class MatchVisualizer:
 
             H, W = self.camera.height, self.camera.width
             fy = self.camera.params[1]
-            frustum = self.server.scene.add_camera_frustum(
+            self.camera_frustum = self.server.scene.add_camera_frustum(
                 f"/colmap/frame_{ts}/frustum",
                 fov=2 * np.arctan2(H / 2, fy),
                 aspect=W / H,
@@ -379,11 +378,13 @@ class MatchVisualizer:
                 image=self.cam_img_marked,
             )
 
-            @frustum.on_click
+            @self.camera_frustum.on_click
             def _(_, frame=self.camera_frame) -> None:
                 for client in self.server.get_clients().values():
                     client.camera.wxyz = frame.wxyz
                     client.camera.position = frame.position
+
+        self.camera_frustum.image = self.cam_img_marked
 
     def run(self):
         """Keeps the server running."""

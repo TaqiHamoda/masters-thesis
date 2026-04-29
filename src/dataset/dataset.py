@@ -53,6 +53,7 @@ class Dataset:
         self.mesh_dir.mkdir(parents=True, exist_ok=True)
 
         self.mesh_ply = self.mesh_dir / "mesh.ply"
+        self.mesh_texture = self.mesh_dir / "texture.png"
         self.reflectivity_texture = self.mesh_dir / "reflectivity.png"
 
         self.image_dir = self.output_path / "images"

@@ -228,7 +228,7 @@ class VertexVisualizer:
         self.sss_patch_marked = self.draw_target(sss_patch, int(dot_x), int(dot_y))
 
         # --- 3. Prepare 3D Point ---
-        self.target_3d = np.array([[vertex.p_x, vertex.p_y, vertex.p_z]]) - self.center_offset
+        self.target_3d = np.array([[vertex.hit.p_x, vertex.hit.p_y, vertex.hit.p_z]]) - self.center_offset
 
         # Update text info
         markdown_text = (
@@ -242,7 +242,7 @@ class VertexVisualizer:
             f"**Distance:** {vertex.hit.distance:.2f}m\n\n"
             f"**Incidence Angle:** {vertex.hit.incidence_angle:.2f} rad\n\n"
             f"**AUV Pose (NED):** ({vertex.hit.pose.x:.2f}, {vertex.hit.pose.y:.2f}, {vertex.hit.pose.z:.2f}) m\n\n"
-            f"**3D Point (NED):** ({vertex.p_x:.2f}, {vertex.p_y:.2f}, {vertex.p_z:.2f}) m\n\n"
+            f"**3D Point (NED):** ({vertex.hit.p_x:.2f}, {vertex.hit.p_y:.2f}, {vertex.hit.p_z:.2f}) m\n\n"
         )
         self.gui_info.content = markdown_text
 

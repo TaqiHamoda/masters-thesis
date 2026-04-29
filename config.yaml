@@ -50,7 +50,7 @@ process_acoustic:                     # Generates an XTF and a PNG using the SSS
 registration:
   enabled: true                       # Perform cross-modal registration between sonar hits and optical images
   num_threads: 6                      # Number of threads to use for parallel processing (Default: 6)
-  plane_thickness: 0.10               # Thickness of the plane in meters for matching sonar hits to photogrammetry points (Default: 0.10)
+  plane_thickness: 0.01               # Thickness of the plane in meters for matching sonar hits to photogrammetry points (Default: 0.01)
   normal_vector: [1.0, 0.0, 0.0]      # Normal vector of the plane for matching sonar hits to photogrammetry points
                                       # Default assumes YZ plane fan (standard for Side-Scan Sonar)
 

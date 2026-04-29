@@ -178,7 +178,7 @@ class Photogrammetry:
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texmap_from_color
         ms.apply_filter(
             'compute_texmap_from_color',
-            textname='texture.png',
+            textname=self.dataset.mesh_texture.name,
             textw=tex_size, texth=tex_size
         )
 

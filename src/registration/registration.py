@@ -39,6 +39,11 @@ class Registration:
             for img in self.reconstruction.images.values()
         }
 
+        self.mesh = None
+        self.scene = None
+        self.vertices = None
+
+    def load_mesh(self):
         # The RaycastingScene requires Open3D's Tensor-based mesh, so we convert the legacy mesh
         self.mesh = o3d.io.read_triangle_mesh(str(self.dataset.mesh_ply))
         self.mesh = o3d.t.geometry.TriangleMesh.from_legacy(self.mesh)
@@ -114,7 +119,10 @@ class Registration:
                 ping_idx=sss.ping_idx,
                 bin_idx=bins[i],
                 distance=distances[i],
-                incidence_angle=incidence_angles[i]
+                incidence_angle=incidence_angles[i],
+                p_x=points[i, 0],
+                p_y=points[i, 1],
+                p_z=points[i, 2],
             )
             for i in range(len(distances))
         ]
@@ -139,10 +147,7 @@ class Registration:
                 matches.append(ImageHit(
                     hit=hits[i],
                     u=o_inters[i, 0],
-                    v=o_inters[i, 1],
-                    p_x=p_inters[i, 0],
-                    p_y=p_inters[i, 1],
-                    p_z=p_inters[i, 2],
+                    v=o_inters[i, 1]
                 ))
 
         return matches
@@ -159,17 +164,12 @@ class Registration:
         return [
             VertexHit(
                 hit=hits[i],
-                vertex_idx=is_valid[i],
-                p_x=vertices[i, 0],
-                p_y=vertices[i, 1],
-                p_z=vertices[i, 2],
+                vertex_idx=is_valid[i]
             )
             for i in range(len(hits))
         ]
 
-    def _save_matches(self, img_name: str) -> None:
-        ts = int(img_name.replace(".jpg", ''))
-
+    def _save_matches(self, ts: int) -> None:
         matches_file = self.dataset.matches_dir / f"{ts}.csv"
         if matches_file.exists():
             return
@@ -181,12 +181,12 @@ class Registration:
 
         Dataset.write_data(matches_file, matches)
 
-    def _save_vertices(self, s_ts: int) -> None:
-        vertices_file = self.dataset.vertices_dir / f"{s_ts}.csv"
+    def _save_vertices(self, ts: int) -> None:
+        vertices_file = self.dataset.vertices_dir / f"{ts}.csv"
         if vertices_file.exists():
             return
 
-        sss = self.dataset.sonar[s_ts]
+        sss = self.dataset.sonar[ts]
         hits = self.get_vertices(sss)
         if len(hits) == 0:
             return
@@ -199,7 +199,7 @@ class Registration:
         with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
             list(tqdm(
                 executor.map(
-                    lambda img: self._save_matches(img.name),
+                    lambda img: self._save_matches(int(img.name.replace(".jpg", ''))),
                     images
                 ),
                 total=len(images),
@@ -207,6 +207,8 @@ class Registration:
             ))
 
     def save_vertices(self) -> None:
+        self.load_mesh()
+
         sonars = list(self.sss_poses.keys())
 
         for ts in tqdm(sonars, desc="Processing vertex hits"):
