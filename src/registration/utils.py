@@ -146,7 +146,6 @@ def get_distances(pose: Pose, points: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: An nx1 numpy array where each element is the distance in meters.
     """
-
     return np.linalg.norm(points - pose.get_position(), axis=1)
 
 
@@ -178,14 +177,13 @@ def get_incidence_angles(pose: Pose, points: np.ndarray, eps: float = 1e-6) -> n
     Returns:
         np.ndarray: An nx1 numpy array where each element is the incidence angle in radians.
     """
-
     v_ned = points - pose.get_position()
-    
+
     # Rotate to Body frame to get correct cross-track distance
     ned_R_body = pose.get_rotation_matrix().T
     v_body = (ned_R_body @ v_ned.T).T
-    
-    opposite = v_ned[:, 2]           # Depth/Z difference
+
+    opposite = np.abs(v_ned[:, 2])   # Depth/Z difference
     adjacent = np.abs(v_body[:, 1])  # Cross-track/Y difference in body frame
-    
-    return np.arctan(opposite / (adjacent + eps))
+
+    return np.arctan(adjacent / (opposite + eps))

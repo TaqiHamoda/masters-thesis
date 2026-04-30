@@ -15,18 +15,12 @@ class Decomposition:
         self.waterfall = np.load(dataset.sonar_file)["data"]
         self.vertex_hits = sorted(self.dataset.vertices_dir.glob("*.csv"))
 
-    def get_vertex_hits(self, filepath: Path) -> List[VertexHit]:
-        if not filepath.exists():
-            return []
-
-        return list(VertexHit.from_csv(filepath).values())
-
     def get_incidence_angle_map(self) -> Tuple[np.ndarray, np.ndarray]:
         angles = np.zeros_like(self.waterfall, dtype=np.float32)
         counts = np.zeros_like(self.waterfall)
 
         for v_hit in tqdm(self.vertex_hits):
-            for vertex in self.get_vertex_hits(v_hit):
+            for vertex in VertexHit.from_csv(v_hit):
                 if vertex.hit.ping_idx >= angles.shape[0] or vertex.hit.bin_idx >= angles.shape[1]:
                     continue
 
@@ -62,23 +56,54 @@ class Decomposition:
         np.savez_compressed(self.dataset.sonar_angles, data=angles)
         np.savez_compressed(self.dataset.sonar_reflectivity, data=reflectivity)
 
+    def print_stats(self) -> None:
+        reflectivity = np.load(self.dataset.sonar_reflectivity)["data"]
+        data = reflectivity[reflectivity > 0]
+        stats = {
+            "Min": np.min(data),
+            "1st %": np.percentile(data, 1),
+            "25th %": np.percentile(data, 25),
+            "Median": np.median(data),
+            "75th %": np.percentile(data, 75),
+            "99th %": np.percentile(data, 99),
+            "Max": np.max(data),
+            "Mean": np.mean(data),
+            "Std Dev": np.std(data)
+        }
+
+        print("="*35)
+        print(f"{'Reflectivity Metric':<18} | {'Value':>12}")
+        print("-" * 35)
+
+        for metric, value in stats.items():
+            # Use :.4f for precision, or :.2e if you expect very tiny/huge numbers
+            print(f"{metric:<18} | {value:>12.4f}")
+
+        print("="*35)
+
     def save_reflectivity_image(self, lower: float, upper: float) -> None:
         reflectivity = np.load(self.dataset.sonar_reflectivity)["data"]
 
-        reflectivity = np.clip(
-            reflectivity,
-            np.percentile(reflectivity, lower),
-            np.percentile(reflectivity, upper)
+        is_valid = reflectivity > 0
+        reflectivity[is_valid] = np.clip(
+            reflectivity[is_valid],
+            np.percentile(reflectivity[is_valid], lower),
+            np.percentile(reflectivity[is_valid], upper)
         )
 
-        reflectivity -= np.min(reflectivity)
+        # Normalize reflectivity values
+        reflectivity -= np.min(reflectivity[is_valid])
         reflectivity /= np.max(reflectivity)
-        reflectivity = (reflectivity * 255).astype(np.uint8)
+        reflectivity[~is_valid] = 0
+
+        reflectivity = (255 * reflectivity).astype(np.uint8)
+        reflectivity = cv2.applyColorMap(reflectivity, cv2.COLORMAP_RAINBOW)
+        reflectivity[~is_valid] = (0, 0, 0)  # Set Invalid to black
 
         # Flip to match PNG outputted from XTF orientation
         reflectivity = cv2.flip(reflectivity, 0)
 
         cv2.imwrite(
             str(self.dataset.reflectivity_png),
-            cv2.applyColorMap(reflectivity, cv2.COLORMAP_HSV)
+            reflectivity
         )

@@ -63,7 +63,7 @@ class Registration:
         Raytraces from triangle centroids towards the transducer to check for collisions.
         Returns the indices of which vertices have a clear, unobstructed line-of-sight.
         """
-        pose = sss.navigation.pose
+        pose = self.sss_poses[sss.navigation.pose.timestamp]
 
         inters = get_intersections(pose, points, thickness=self.thickness, n_local=self.n_local)
         dists = get_distances(pose, points[inters])
@@ -194,8 +194,7 @@ class Registration:
         Dataset.write_data(vertices_file, hits)
 
     def save_matches(self) -> None:
-        images_ts = list(self.img_ids.values())
-
+        images_ts = list(self.img_ids.keys())
         with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
             list(tqdm(
                 executor.map(self._save_matches, images_ts),
@@ -206,6 +205,10 @@ class Registration:
     def save_vertices(self) -> None:
         self.load_mesh()
 
-        sonars = list(self.sss_poses.keys())
-        for ts in tqdm(sonars, desc="Processing vertex hits"):
-            self._save_vertices(ts)
+        sonars_ts = list(self.sss_poses.keys())
+        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+            list(tqdm(
+                executor.map(self._save_vertices, sonars_ts),
+                total=len(sonars_ts),
+                desc="Processing vertex hits"
+            ))

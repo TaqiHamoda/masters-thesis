@@ -118,6 +118,8 @@ if __name__ == "__main__":
             print("Performing component decomposition...")
             decomposition.process_decomposition()
 
+        decomposition.print_stats()
+
         print("Saving reflectivity image...")
         decomposition.save_reflectivity_image(
             lower=decomposition_cfg['lower_percentile'],

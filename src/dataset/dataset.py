@@ -48,6 +48,7 @@ class Dataset:
         self.sonar_angles = self.sonar_dir / "angles.npz"
         self.sonar_reflectivity = self.sonar_dir / "reflectivity.npz"
         self.reflectivity_png = self.sonar_dir / "reflectivity.png"
+        self.reflectivity_vertices = self.sonar_dir / "vertices.npz"
 
         self.mesh_dir = self.output_path / "mesh"
         self.mesh_dir.mkdir(parents=True, exist_ok=True)

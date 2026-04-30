@@ -12,3 +12,4 @@ open3d
 imageio
 viser
 matplotlib
+scikit-image
