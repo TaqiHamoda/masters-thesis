@@ -1,8 +1,7 @@
 import cv2
 import numpy as np
 
-from pathlib import Path
-from typing import List, Tuple
+from typing import Tuple
 from tqdm import tqdm
 
 from .dataset import Dataset, VertexHit
@@ -13,7 +12,7 @@ class Decomposition:
         self.dataset = dataset
 
         self.waterfall = np.load(dataset.sonar_file)["data"]
-        self.vertex_hits = sorted(self.dataset.vertices_dir.glob("*.csv"))
+        self.vertex_hits = sorted(self.dataset.vertex_matches_dir.glob("*.csv"))
 
     def get_incidence_angle_map(self) -> Tuple[np.ndarray, np.ndarray]:
         angles = np.zeros_like(self.waterfall, dtype=np.float32)
@@ -91,6 +90,9 @@ class Decomposition:
             np.percentile(reflectivity[is_valid], upper)
         )
 
+        # Use logarithmic scale to amplify variations in reflectivity
+        reflectivity = np.log10(1 + reflectivity)
+
         # Normalize reflectivity values
         reflectivity -= np.min(reflectivity[is_valid])
         reflectivity /= np.max(reflectivity)
@@ -102,8 +104,14 @@ class Decomposition:
 
         # Flip to match PNG outputted from XTF orientation
         reflectivity = cv2.flip(reflectivity, 0)
-
         cv2.imwrite(
             str(self.dataset.reflectivity_png),
             reflectivity
+        )
+
+        # Overlay onto Sonar image to compare results
+        sonar = cv2.imread(str(self.dataset.sonar_png))
+        cv2.imwrite(
+            str(self.dataset.overlay_png),
+            cv2.addWeighted(sonar, 0.5, reflectivity, 0.5, 0)
         )

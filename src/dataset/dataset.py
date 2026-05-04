@@ -38,6 +38,7 @@ class Dataset:
 
         self.cameras_csv = self.output_path / "camera_poses.csv"
         self.sonar_csv = self.output_path / "sonar_poses.csv"
+        self.corrected_csv = self.output_path / "corrected_poses.csv"
 
         self.sonar_dir = self.output_path / "sonar"
         self.sonar_dir.mkdir(parents=True, exist_ok=True)
@@ -49,6 +50,7 @@ class Dataset:
         self.sonar_reflectivity = self.sonar_dir / "reflectivity.npz"
         self.reflectivity_png = self.sonar_dir / "reflectivity.png"
         self.reflectivity_vertices = self.sonar_dir / "vertices.npz"
+        self.overlay_png = self.sonar_dir / "overlay.png"
 
         self.mesh_dir = self.output_path / "mesh"
         self.mesh_dir.mkdir(parents=True, exist_ok=True)
@@ -60,11 +62,11 @@ class Dataset:
         self.image_dir = self.output_path / "images"
         self.image_dir.mkdir(parents=True, exist_ok=True)
 
-        self.matches_dir = self.output_path / "matches"
-        self.matches_dir.mkdir(parents=True, exist_ok=True)
+        self.image_matches_dir = self.output_path / "image_matches"
+        self.image_matches_dir.mkdir(parents=True, exist_ok=True)
 
-        self.vertices_dir = self.output_path / "vertices"
-        self.vertices_dir.mkdir(parents=True, exist_ok=True)
+        self.vertex_matches_dir = self.output_path / "vertex_matches"
+        self.vertex_matches_dir.mkdir(parents=True, exist_ok=True)
 
         self.img_topic = img_topic
         self.odo_topic = odo_topic
@@ -78,12 +80,6 @@ class Dataset:
         self.camera_trans = np.array(camera_trans)
         self.sonar_trans = np.array(sonar_trans)
 
-    @staticmethod
-    def write_data(file_path: Path, data: List[Datatype]):
-        with open(file_path, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=data[0].headers)
-            writer.writeheader()
-            writer.writerows([d.to_dict() for d in data])
 
     def exists(self) -> bool:
         return self.cameras_csv.exists() and\
@@ -271,8 +267,8 @@ class Dataset:
             self.sonar[sonar_ts] = sonar
 
     def export_data(self):
-        Dataset.write_data(self.cameras_csv, list(self.images.values()))
-        Dataset.write_data(self.sonar_csv, list(self.sonar.values()))
+        Image.to_csv(self.cameras_csv, list(self.images.values()))
+        SideScanSonar.to_csv(self.sonar_csv, list(self.sonar.values()))
 
     def data_stats(self):
         min_x, min_y, min_z, min_alt = np.inf, np.inf, np.inf, np.inf

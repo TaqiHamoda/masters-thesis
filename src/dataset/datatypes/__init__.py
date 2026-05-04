@@ -6,3 +6,4 @@ from .sidescan import SideScanSonar
 from .acoustic_hit import AcousticHit
 from .image_hit import ImageHit
 from .vertex_hit import VertexHit
+from .delta_hit import DeltaHit

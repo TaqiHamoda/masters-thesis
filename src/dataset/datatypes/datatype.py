@@ -25,3 +25,10 @@ class Datatype:
                 data.append(parser(row))
 
         return data
+
+    @staticmethod
+    def to_csv(file_path: Path, data: List[Self]) -> None:
+        with open(file_path, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=data[0].headers)
+            writer.writeheader()
+            writer.writerows([d.to_dict() for d in data])

@@ -24,7 +24,7 @@ class VertexVisualizer:
         self.current_scan_idx = 0
         self.current_vertex_idx = 0
 
-        self.scans = sorted(dataset.vertices_dir.glob("*.csv"))
+        self.scans = sorted(dataset.vertex_matches_dir.glob("*.csv"))
         self.vertices: List[VertexHit] = []
 
         # Start Viser server
@@ -190,7 +190,7 @@ class VertexVisualizer:
         self.current_vertex_idx = 0
         self.vertices.clear()
 
-        self.vertices.extend(VertexHit.from_csv(self.scans[self.current_scan_idx]).values())
+        self.vertices.extend(VertexHit.from_csv(self.scans[self.current_scan_idx]))
 
     def draw_target(self, img_array: np.ndarray, u: int, v: int) -> np.ndarray:
         """Draws a highly visible red target on a copy of the image array."""

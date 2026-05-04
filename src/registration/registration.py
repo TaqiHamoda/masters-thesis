@@ -99,8 +99,8 @@ class Registration:
         pose = self.sss_poses[sss.navigation.pose.timestamp]
 
         channels = get_corresponding_channels(pose, points)
-        offsets = np.power(-1, 1 - channels.reshape(-1, 1)) * self.sonar_offset
-        offsets = (pose.get_rotation_matrix() @ offsets.T).T  # Transform offsets to world frame
+        local_offsets = np.power(-1, 1 - channels.reshape(-1, 1)) * self.sonar_offset
+        offsets = (pose.get_rotation_matrix() @ local_offsets.T).T  # Transform offsets to world frame
 
         distances = get_distances(pose, points - offsets)
         incidence_angles = get_incidence_angles(pose, points - offsets)
@@ -120,6 +120,9 @@ class Registration:
                 bin_idx=bins[i],
                 distance=distances[i],
                 incidence_angle=incidence_angles[i],
+                offset_x=local_offsets[i, 0],
+                offset_y=local_offsets[i, 1],
+                offset_z=local_offsets[i, 2],
                 p_x=points[i, 0],
                 p_y=points[i, 1],
                 p_z=points[i, 2],
@@ -127,8 +130,8 @@ class Registration:
             for i in range(len(distances))
         ]
 
-    def get_matches(self, pose: Pose) -> List[ImageHit]:
-        points_2d, points_3d = get_image_geometry(self.reconstruction, self.img_ids[pose.timestamp])
+    def get_matches(self, ts: int) -> List[ImageHit]:
+        points_2d, points_3d = get_image_geometry(self.reconstruction, self.img_ids[ts])
 
         matches = []
         for s_ts in self.sss_poses.keys():
@@ -143,7 +146,6 @@ class Registration:
 
             hits = self.get_hits(sss, p_inters)
             for i in range(len(hits)):
-                hits[i].pose.timestamp = pose.timestamp  # Use the optical image timestamp
                 matches.append(ImageHit(
                     hit=hits[i],
                     u=o_inters[i, 0],
@@ -152,9 +154,10 @@ class Registration:
 
         return matches
 
-    def get_vertices(self, sss: SideScanSonar) -> List[VertexHit]:
-        is_valid = self.get_visible_points(sss, self.vertices, raytrace=True)
+    def get_vertices(self, ts: int) -> List[VertexHit]:
+        sss = self.dataset.sonar[ts]
 
+        is_valid = self.get_visible_points(sss, self.vertices, raytrace=True)
         if len(is_valid) == 0:
             return []
 
@@ -170,28 +173,26 @@ class Registration:
         ]
 
     def _save_matches(self, ts: int) -> None:
-        matches_file = self.dataset.matches_dir / f"{ts}.csv"
+        matches_file = self.dataset.image_matches_dir / f"{ts}.csv"
         if matches_file.exists():
             return
 
-        pose = self.cam_poses[ts]
-        matches = self.get_matches(pose)
+        matches = self.get_matches(ts)
         if len(matches) == 0:
             return
 
-        Dataset.write_data(matches_file, matches)
+        ImageHit.to_csv(matches_file, matches)
 
     def _save_vertices(self, ts: int) -> None:
-        vertices_file = self.dataset.vertices_dir / f"{ts}.csv"
+        vertices_file = self.dataset.vertex_matches_dir / f"{ts}.csv"
         if vertices_file.exists():
             return
 
-        sss = self.dataset.sonar[ts]
-        hits = self.get_vertices(sss)
+        hits = self.get_vertices(ts)
         if len(hits) == 0:
             return
 
-        Dataset.write_data(vertices_file, hits)
+        VertexHit.to_csv(vertices_file, hits)
 
     def save_matches(self) -> None:
         images_ts = list(self.img_ids.keys())

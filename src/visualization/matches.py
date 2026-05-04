@@ -30,7 +30,7 @@ class MatchVisualizer:
         self.current_img_idx = 0
         self.current_match_idx = 0
 
-        self.images = sorted(dataset.matches_dir.glob("*.csv"))
+        self.images = sorted(dataset.image_matches_dir.glob("*.csv"))
         self.matches: List[ImageHit] = []
 
         # Start Viser server
@@ -276,7 +276,7 @@ class MatchVisualizer:
         # Update text info
         markdown_text = (
             f"### Status\n"
-            f"**Timestamp:** {match.hit.pose.timestamp}\n\n"
+            f"**Timestamp:** {self.get_timestamp()}\n\n"
             f"**Image:** {self.current_img_idx + 1} / {len(self.images)}\n\n"
             f"**Match:** {self.current_match_idx + 1} / {len(self.matches)}\n\n"
             f"---\n"

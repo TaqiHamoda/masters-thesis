@@ -54,7 +54,16 @@ def export_to_texture(
     v_reflectivity = np.zeros_like((n, 1), dtype=np.float32)
 
     reflectivity = np.load(dataset.sonar_reflectivity)["data"]
-    for v_hit in tqdm(dataset.vertices_dir.glob("*.csv")):
+
+    # Clip reflectivity values to remove outliers
+    is_valid = reflectivity > 0
+    reflectivity[is_valid] = np.clip(
+        reflectivity[is_valid],
+        np.percentile(reflectivity[is_valid], 1),
+        np.percentile(reflectivity[is_valid], 99)
+    )
+
+    for v_hit in tqdm(dataset.vertex_matches_dir.glob("*.csv")):
         for vertex in VertexHit.from_csv(v_hit).values():
             if vertex.hit.ping_idx >= reflectivity.shape[0] or vertex.hit.bin_idx >= reflectivity.shape[1]:
                 continue

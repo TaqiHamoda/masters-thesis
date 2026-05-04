@@ -109,8 +109,10 @@ if __name__ == "__main__":
             n_local=registration_cfg['normal_vector'],
             num_threads=registration_cfg['num_threads'],
         )
-        registration.save_matches()
-        registration.save_vertices()
+        # registration.save_matches()
+        # registration.save_vertices()
+        # registration.optimize_extrinsics(28872, 31512)
+        registration.optimize_extrinsics(29000, 29010)
 
     if decomposition_cfg['enabled']:
         decomposition = Decomposition(dataset)

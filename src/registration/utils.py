@@ -3,7 +3,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from typing import Tuple, Dict
 
-from ..dataset import Dataset, Pose
+from ..dataset import Dataset, Pose, SideScanSonar
 
 
 def mean_position_orientation_error(refined_poses: Dict[int, Pose], poses: Dict[int, Pose]) -> Tuple[np.ndarray, np.ndarray]:
@@ -115,7 +115,7 @@ def get_image_geometry(reconstruction: pycolmap.Reconstruction, img_id: int) -> 
     return np.array(points_2d), np.array(points_3d)
 
 
-def get_intersections(pose: Pose, points: np.ndarray, n_local: np.ndarray = np.array([1.0, 0.0, 0.0]), thickness: float = 0.01):
+def get_distances_to_plane(pose: Pose, points: np.ndarray, n_local: np.ndarray = np.array([1.0, 0.0, 0.0])):
     """
     Parameters:
         pose: AUV pose object
@@ -133,7 +133,22 @@ def get_intersections(pose: Pose, points: np.ndarray, n_local: np.ndarray = np.a
     plane_normal = body_R_ned @ n_local  # Rotate the local normal vector to the global frame
 
     # shortest distance to the plane
-    distance = np.dot(plane_normal, (points - plane_pos).T).T
+    return np.dot(plane_normal, (points - plane_pos).T).T
+
+
+def get_intersections(pose: Pose, points: np.ndarray, n_local: np.ndarray = np.array([1.0, 0.0, 0.0]), thickness: float = 0.01):
+    """
+    Parameters:
+        pose: AUV pose object
+        points: np.ndarray that is nx3
+        n_local: Local normal vector to define a plane. Default assumes YZ plane fan (standard for Side-Scan Sonar).
+        thickness: Plane thickness in meters.
+
+    Returns:
+        np.ndarray: A boolean array of which points intersect the plane.
+        If a triangle is within half the thickness of the plane, it is marked as True.
+    """
+    distance = get_distances_to_plane(pose, points, n_local)
     return np.abs(distance) <= thickness / 2.0
 
 
