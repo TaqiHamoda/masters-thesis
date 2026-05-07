@@ -33,33 +33,33 @@ photogrammetry:
     ba_global_max_refinements: 5      # The thresholds for iterative bundle adjustment refinements (Default: 5)
 
   dense:
-    max_image_size: 2000              # Maximum image size in either dimension for dense reconstruction (Default: -1)
+    max_image_size: 1200              # Maximum image size in either dimension for dense reconstruction (Default: -1)
     check_num_images: 50              # Number of overlapping images to transitively check for fusing points (Default: 50)
-    cache_size: 32.0                  # Cache size in gigabytes for fusion (Default: 32.0)
+    cache_size: 16.0                  # Cache size in gigabytes for fusion (Default: 32.0)
 
   mesh:
     mesh_depth: 12                    # Depth parameter for Poisson surface resolution (Default: 8)
     reduce_perc: 0.80                 # Percentage of faces to keep when simplifying the mesh (Default: 0.90)
     tex_size: 32768                   # Texture size for UV mapping (Default: 1024)
 
-process_acoustic:                     # Generates an XTF and a PNG using the SSS data
-  enabled: false
+process_acoustic:
+  enabled: false                      # Generates an XTF and a PNG using the SSS data
   sonar_name: "ARC Scout Mk II"       # Name of the sonar for labeling outputs
   sample_dtype: uint16                # The sample datatype used (options: uint8, uint16, uint32, float32)
 
 registration:
-  enabled: true                       # Perform cross-modal registration between sonar hits and optical images
-  num_threads: 6                      # Number of threads to use for parallel processing (Default: 6)
+  enabled: false                       # Perform cross-modal registration between sonar hits and optical images
+  num_threads: 8                      # Number of threads to use for parallel processing (Default: 6)
   plane_thickness: 0.01               # Thickness of the plane in meters for matching sonar hits to photogrammetry points (Default: 0.01)
   normal_vector: [1.0, 0.0, 0.0]      # Normal vector of the plane for matching sonar hits to photogrammetry points
                                       # Default assumes YZ plane fan (standard for Side-Scan Sonar)
 
 decomposition:                        # Colormap used for reflectivity image is OpenCV's RAINBOW.
-  enabled: false                       # Perform reflectivity decomposition of the sonar data (dependent on vertex registration)
+  enabled: false                      # Perform reflectivity decomposition of the sonar data (dependent on vertex registration)
   lower_percentile: 1                 # Lower percentile for reflectivity clipping in reflectivity image (Default: 1)
   upper_percentile: 99                # Upper percentile for reflectivity clipping in reflectivity image (Default: 99)
 
 visualizations:
-  optical_matching: false             # Enable optical registration visualization (Requires sonar png and optical matches)
+  optical_matching: true             # Enable optical registration visualization (Requires sonar png and optical matches)
   vertex_matching: false              # Enable vertex registration visualization (Requires sonar png and vertex matches)
   reflectivity_decomposition: false   # Enable reflectivity decomposition visualization (Requires sonar png and reflectivity decomposition)

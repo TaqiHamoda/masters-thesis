@@ -91,7 +91,7 @@ class Decomposition:
         )
 
         # Use logarithmic scale to amplify variations in reflectivity
-        reflectivity = np.log10(1 + reflectivity)
+        reflectivity = np.log1p(reflectivity)
 
         # Normalize reflectivity values
         reflectivity -= np.min(reflectivity[is_valid])

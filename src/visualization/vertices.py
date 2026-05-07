@@ -8,10 +8,16 @@ import time
 from typing import List
 
 from ..dataset import Dataset, VertexHit
+from ..registration import Registration
 
 
 class VertexVisualizer:
-    def __init__(self, dataset: Dataset, patch_size: int = 1000):
+    def __init__(
+        self,
+        dataset: Dataset,
+        registration: Registration,
+        patch_size: int = 1000
+    ):
         """
         Initializes the Viser-based visualization tool.
         """
@@ -19,12 +25,13 @@ class VertexVisualizer:
         self.camera_wxyz = np.array((0.999994465, -4.99997233e-07, -1.66354234e-09, 0.00332708463))
 
         self.dataset = dataset
+        self.registration = registration
         self.patch_size = patch_size
 
         self.current_scan_idx = 0
         self.current_vertex_idx = 0
 
-        self.scans = sorted(dataset.vertex_matches_dir.glob("*.csv"))
+        self.scans = sorted(dataset.sonar.keys())
         self.vertices: List[VertexHit] = []
 
         # Start Viser server
@@ -52,11 +59,10 @@ class VertexVisualizer:
 
     def _load_point_cloud(self):
         """Loads and displays the sparse point cloud in the 3D scene."""
-        mesh = o3d.io.read_triangle_mesh(str(self.dataset.mesh_ply))
-        mesh = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
+        self.registration.load_mesh()
 
-        points = mesh.vertex.positions.numpy()
-        colors = mesh.vertex.colors.numpy()
+        points = self.registration.vertices
+        colors = self.registration.mesh.vertex.colors.numpy()
 
         # Center the point cloud roughly around the origin for easier viewing
         self.center_offset = points.mean(axis=0)
@@ -183,14 +189,22 @@ class VertexVisualizer:
 
     def get_timestamp(self) -> int:
         """Returns the timestamp of the current image."""
-        return int(self.scans[self.current_scan_idx].name.replace(".csv", ''))
+        return self.scans[self.current_scan_idx]
 
     def set_scan(self) -> None:
         """Loads the matches and optical image for the current index."""
         self.current_vertex_idx = 0
         self.vertices.clear()
 
-        self.vertices.extend(VertexHit.from_csv(self.scans[self.current_scan_idx]))
+        ts = self.get_timestamp()
+
+        vertices_path = self.dataset.vertex_matches_dir / f"{ts}.csv"
+        if vertices_path.exists():
+            self.vertices.extend(VertexHit.from_csv(vertices_path))
+        else:
+            self.vertices.extend(self.registration.get_vertices(ts))
+            if len(self.vertices) > 0:
+                VertexHit.to_csv(vertices_path, self.vertices)
 
     def draw_target(self, img_array: np.ndarray, u: int, v: int) -> np.ndarray:
         """Draws a highly visible red target on a copy of the image array."""

@@ -6,7 +6,6 @@ from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
 from .utils import (
-    interpolate_poses,
     get_image_geometry,
     get_distances,
     get_intersections,
@@ -31,9 +30,12 @@ class Registration:
         self.n_local = np.array(n_local)
         self.num_threads = num_threads
 
-        self.reconstruction = Photogrammetry.get_reconstruction(dataset)
-        self.cam_poses, self.sss_poses = interpolate_poses(dataset, self.reconstruction)
+        self.sss_poses = {
+            ts: sss.navigation.pose
+            for ts, sss in dataset.sonar.items()
+        }
 
+        self.reconstruction = Photogrammetry.get_reconstruction(dataset)
         self.img_ids = {
             int(img.name.replace(".jpg", '')): img.image_id
             for img in self.reconstruction.images.values()

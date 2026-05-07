@@ -38,7 +38,7 @@ class Dataset:
 
         self.cameras_csv = self.output_path / "camera_poses.csv"
         self.sonar_csv = self.output_path / "sonar_poses.csv"
-        self.corrected_csv = self.output_path / "corrected_poses.csv"
+        self.corrected_csv = self.output_path / "corrected_matches.csv"
 
         self.sonar_dir = self.output_path / "sonar"
         self.sonar_dir.mkdir(parents=True, exist_ok=True)

@@ -12,12 +12,18 @@ from viser.extras.colmap import (
 import time
 from typing import List
 
-from ..dataset import Dataset, ImageHit
+from ..dataset import Dataset, ImageHit, DeltaHit
 from ..photogrammetry import Photogrammetry
+from ..registration import Registration
 
 
 class MatchVisualizer:
-    def __init__(self, dataset: Dataset, patch_size: int = 1000):
+    def __init__(
+        self,
+        dataset: Dataset,
+        registration: Registration,
+        patch_size: int = 1000
+    ):
         """
         Initializes the Viser-based visualization tool.
         """
@@ -25,12 +31,13 @@ class MatchVisualizer:
         self.camera_wxyz = np.array((0.999994465, -4.99997233e-07, -1.66354234e-09, 0.00332708463))
 
         self.dataset = dataset
+        self.registration = registration
         self.patch_size = patch_size
 
         self.current_img_idx = 0
         self.current_match_idx = 0
 
-        self.images = sorted(dataset.image_matches_dir.glob("*.csv"))
+        self.images = sorted(self.registration.img_ids.keys())
         self.matches: List[ImageHit] = []
 
         # Start Viser server
@@ -40,6 +47,13 @@ class MatchVisualizer:
         # Load SSS waterfall (convert to RGB so we can draw a red dot on it)
         self.sss_image = cv2.imread(str(dataset.sonar_png), cv2.IMREAD_COLOR_RGB)
         self.sss_image = cv2.flip(self.sss_image, 0)
+
+        # Corrected DeltaHits
+        self.delta_bin, self.delta_ping = 0, 0
+        self.deltas: List[DeltaHit] = []
+
+        if self.dataset.corrected_csv.exists():
+            self.deltas.extend(DeltaHit.from_csv(self.dataset.corrected_csv))
 
         # Pre-declare layout handles
         self.cam_img_marked = None
@@ -114,6 +128,18 @@ class MatchVisualizer:
             btn_next_match = self.server.gui.add_button("Next Match")
             btn_next_match_100 = self.server.gui.add_button("+100 Matches")
 
+        # Delta Controls
+        folder_delta = self.server.gui.add_folder("Delta Navigation")
+        with folder_delta:
+            btn_prev_bin_delta = self.server.gui.add_button("Prev Bin")
+            btn_next_bin_delta = self.server.gui.add_button("Next Bin")
+
+            btn_prev_ping_delta = self.server.gui.add_button("Prev Ping")
+            btn_next_ping_delta = self.server.gui.add_button("Next Ping")
+
+            btn_save_delta = self.server.gui.add_button("Save Delta")
+            # btn_optimize_extrinsics = self.server.gui.add_button("Optimize Extrinsics")
+
         # Layout & Display Controls
         folder_layout = self.server.gui.add_folder("Display Settings")
         with folder_layout:
@@ -138,6 +164,13 @@ class MatchVisualizer:
             self.gui_auv_scale = self.server.gui.add_slider(
                 "AUV Axes Scale", min=0.1, max=10.0, step=0.1, initial_value=7.0
             )
+
+        # --- Callbacks: View ---
+        @btn_reset_view.on_click
+        def _(_) -> None:
+            for client in self.server.get_clients().values():
+                client.camera.wxyz = self.camera_wxyz
+                client.camera.position = self.camera_pos
 
         # --- Callbacks: Navigation ---
         @btn_prev_img_100.on_click
@@ -171,29 +204,67 @@ class MatchVisualizer:
         @btn_prev_match_100.on_click
         def _(_) -> None:
             self.current_match_idx = max(0, self.current_match_idx - 100)
+            self.delta_bin, self.delta_ping = 0, 0
             self.update_view()
 
         @btn_prev_match.on_click
         def _(_) -> None:
             self.current_match_idx = max(0, self.current_match_idx - 1)
+            self.delta_bin, self.delta_ping = 0, 0
             self.update_view()
 
         @btn_next_match.on_click
         def _(_) -> None:
             self.current_match_idx = min(len(self.matches) - 1, self.current_match_idx + 1)
+            self.delta_bin, self.delta_ping = 0, 0
             self.update_view()
 
         @btn_next_match_100.on_click
         def _(_) -> None:
             self.current_match_idx = min(len(self.matches) - 1, self.current_match_idx + 100)
+            self.delta_bin, self.delta_ping = 0, 0
             self.update_view()
 
-        # --- Callbacks: View ---
-        @btn_reset_view.on_click
+        # Callbacks: Deltas
+        @btn_prev_bin_delta.on_click
         def _(_) -> None:
-            for client in self.server.get_clients().values():
-                client.camera.wxyz = self.camera_wxyz
-                client.camera.position = self.camera_pos
+            self.delta_bin -= 1
+            self.update_view()
+
+        @btn_next_bin_delta.on_click
+        def _(_) -> None:
+            self.delta_bin += 1
+            self.update_view()
+
+        @btn_prev_ping_delta.on_click
+        def _(_) -> None:
+            self.delta_ping -= 1
+            self.update_view()
+
+        @btn_next_ping_delta.on_click
+        def _(_) -> None:
+            self.delta_ping += 1
+            self.update_view()
+
+        @btn_save_delta.on_click
+        def _(_) -> None:
+            self.deltas.append(DeltaHit(
+                hit=self.matches[self.current_match_idx].hit,
+                delta_bin=self.delta_bin,
+                delta_ping=self.delta_ping
+            ))
+            DeltaHit.to_csv(self.dataset.corrected_csv, self.deltas)
+
+        # @btn_optimize_extrinsics.on_click
+        # def _(_) -> None:
+        #     match = self.matches[self.current_match_idx]
+        #     sss = self.dataset.sonar[match.hit.pose.timestamp]
+        #     print(optimize_extrinsics(
+        #         self.deltas,
+        #         sorted(self.registration.sss_poses.values(), key=lambda x: x.timestamp),
+        #         sss.slant_range,
+        #         sss.num_samples
+        #     ))
 
         # --- Callbacks: Display Settings ---
         # When display settings change, we only redraw the scene using existing arrays
@@ -215,18 +286,26 @@ class MatchVisualizer:
 
     def get_timestamp(self) -> int:
         """Returns the timestamp of the current image."""
-        return int(self.images[self.current_img_idx].name.replace(".csv", ''))
+        return self.images[self.current_img_idx]
 
     def set_image(self) -> None:
         """Loads the matches and optical image for the current index."""
         self.current_match_idx = 0
+        self.delta_bin, self.delta_ping = 0, 0
         self.matches.clear()
 
-        self.matches.extend(ImageHit.from_csv(self.images[self.current_img_idx]))
+        ts = self.get_timestamp()
+
+        matches_path = self.dataset.image_matches_dir / f"{ts}.csv"
+        if matches_path.exists():
+            self.matches.extend(ImageHit.from_csv(matches_path))
+        else:
+            self.matches.extend(self.registration.get_matches(ts))
+            if len(self.matches) > 0:
+                ImageHit.to_csv(matches_path, self.matches)
 
         # Load optical image and ensure it's RGB
-        img_name = self.images[self.current_img_idx].name.replace(".csv", ".jpg")
-        img_path = self.dataset.image_dir / img_name
+        img_path = self.dataset.image_dir / f"{ts}.jpg"
         self.image = cv2.imread(str(img_path), cv2.IMREAD_COLOR_RGB)
 
         if self.camera_frame is not None:
@@ -264,8 +343,8 @@ class MatchVisualizer:
 
         sss_patch = self.sss_image[ping_start:ping_end, bin_start:bin_end]
 
-        dot_x = match.hit.bin_idx - bin_start
-        dot_y = match.hit.ping_idx - ping_start
+        dot_x = match.hit.bin_idx - bin_start + self.delta_bin
+        dot_y = match.hit.ping_idx - ping_start + self.delta_ping
         self.sss_patch_marked = self.draw_target(sss_patch, int(dot_x), int(dot_y))
 
         # --- 3. Prepare 3D Point ---
@@ -279,6 +358,8 @@ class MatchVisualizer:
             f"**Timestamp:** {self.get_timestamp()}\n\n"
             f"**Image:** {self.current_img_idx + 1} / {len(self.images)}\n\n"
             f"**Match:** {self.current_match_idx + 1} / {len(self.matches)}\n\n"
+            f"**Delta Bin:** {self.delta_bin}\n\n"
+            f"**Delta Ping:** {self.delta_ping}\n\n"
             f"---\n"
             f"**Optical Pixel (u, v):** ({match.u}, {match.v})\n\n"
             f"**Sonar Ping:** {match.hit.ping_idx}\n\n"

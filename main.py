@@ -100,27 +100,24 @@ if __name__ == "__main__":
             print("Processing Sonar Data into PNG file...")
             export_to_png(dataset, xtf_cfg['sample_dtype'])
 
+    registration = Registration(
+        dataset,
+        sonar_offset=extrinsics_cfg['sonar_offset'],
+        thickness=registration_cfg['plane_thickness'],
+        n_local=registration_cfg['normal_vector'],
+        num_threads=registration_cfg['num_threads'],
+    )
+
     if registration_cfg['enabled']:
-        print("Performing optical registration...")
-        registration = Registration(
-            dataset,
-            sonar_offset=extrinsics_cfg['sonar_offset'],
-            thickness=registration_cfg['plane_thickness'],
-            n_local=registration_cfg['normal_vector'],
-            num_threads=registration_cfg['num_threads'],
-        )
         # registration.save_matches()
-        # registration.save_vertices()
-        # registration.optimize_extrinsics(28872, 31512)
-        registration.optimize_extrinsics(29000, 29010)
+        registration.save_vertices()
 
     if decomposition_cfg['enabled']:
         decomposition = Decomposition(dataset)
         if not dataset.sonar_angles.exists() or not dataset.sonar_reflectivity.exists():
             print("Performing component decomposition...")
             decomposition.process_decomposition()
-
-        decomposition.print_stats()
+            decomposition.print_stats()
 
         print("Saving reflectivity image...")
         decomposition.save_reflectivity_image(
@@ -129,7 +126,7 @@ if __name__ == "__main__":
         )
 
     if visual_cfg['optical_matching']:
-        MatchVisualizer(dataset).run()
+        MatchVisualizer(dataset, registration).run()
 
     if visual_cfg['vertex_matching']:
-        VertexVisualizer(dataset).run()
+        VertexVisualizer(dataset, registration).run()

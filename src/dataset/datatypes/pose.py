@@ -8,7 +8,7 @@ from .datatype import Datatype
 
 
 class Pose(Datatype):
-    headers = ["timestamp", "x", "y", "z", "qw", "qx", "qy", "qz"]
+    headers = ["timestamp", "x", "y", "z", "qx", "qy", "qz", "qw"]
 
     def __init__(self,
         timestamp: int,

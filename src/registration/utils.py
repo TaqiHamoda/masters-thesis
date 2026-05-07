@@ -116,24 +116,12 @@ def get_image_geometry(reconstruction: pycolmap.Reconstruction, img_id: int) -> 
 
 
 def get_distances_to_plane(pose: Pose, points: np.ndarray, n_local: np.ndarray = np.array([1.0, 0.0, 0.0])):
-    """
-    Parameters:
-        pose: AUV pose object
-        points: np.ndarray that is nx3
-        n_local: Local normal vector to define a plane. Default assumes YZ plane fan (standard for Side-Scan Sonar).
-        thickness: Plane thickness in meters.
-
-    Returns:
-        np.ndarray: A boolean array of which points intersect the plane.
-        If a triangle is within half the thickness of the plane, it is marked as True.
-    """
     body_R_ned = pose.get_rotation_matrix()
 
     plane_pos = pose.get_position()
     plane_normal = body_R_ned @ n_local  # Rotate the local normal vector to the global frame
 
-    # shortest distance to the plane
-    return np.dot(plane_normal, (points - plane_pos).T).T
+    return (plane_normal @ (points - plane_pos).T).T
 
 
 def get_intersections(pose: Pose, points: np.ndarray, n_local: np.ndarray = np.array([1.0, 0.0, 0.0]), thickness: float = 0.01):
