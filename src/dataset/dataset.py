@@ -156,14 +156,14 @@ class Dataset:
                     odometry_data.append((
                         timestamp,
                         Pose(
-                            timestamp,
-                            p.position.x,
-                            p.position.y,
-                            p.position.z,
-                            p.orientation.w,
-                            p.orientation.x,
-                            p.orientation.y,
-                            p.orientation.z
+                            timestamp=timestamp,
+                            x=p.position.x,
+                            y=p.position.y,
+                            z=p.position.z,
+                            qx=p.orientation.x,
+                            qy=p.orientation.y,
+                            qz=p.orientation.z,
+                            qw=p.orientation.w,
                         )
                     ))
                 elif connection.topic == self.info_topic and camera_params is None:
