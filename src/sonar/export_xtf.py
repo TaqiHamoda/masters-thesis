@@ -5,7 +5,7 @@ from ..dataset import Dataset
 from .utils import get_sample_dtype, get_sample_format
 
 
-def export_to_xtf(dataset: Dataset, sonar_name: str, sample_dtype: str = "uint8"):
+def export_xtf(dataset: Dataset, sonar_name: str, sample_dtype: str = "uint8"):
     # Source: https://github.com/oysstu/pyxtf/blob/master/examples/write_xtf.py
 
     timestamps = sorted(dataset.sonar.keys())

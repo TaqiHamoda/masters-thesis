@@ -48,6 +48,7 @@ class Dataset:
         self.sonar_png = self.sonar_dir / "sonar.png"
         self.sonar_angles = self.sonar_dir / "angles.npz"
         self.sonar_reflectivity = self.sonar_dir / "reflectivity.npz"
+        self.sonar_first_returns = self.sonar_dir / "first_returns.npz"
         self.reflectivity_png = self.sonar_dir / "reflectivity.png"
         self.reflectivity_vertices = self.sonar_dir / "vertices.npz"
         self.overlay_png = self.sonar_dir / "overlay.png"

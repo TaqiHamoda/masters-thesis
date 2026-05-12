@@ -3,7 +3,7 @@ from time import perf_counter, sleep
 
 from src.dataset import Dataset
 from src.photogrammetry import Photogrammetry
-from src.sonar import export_to_xtf, export_to_png
+from src.sonar import export_xtf, export_png, export_first_return
 from src.registration import Registration
 from src.decomposition import Decomposition
 from src.visualization import MatchVisualizer, VertexVisualizer
@@ -77,6 +77,14 @@ if __name__ == "__main__":
         sonar_trans=extrinsics_cfg['sonar'],
     )
 
+    export_first_return(
+        dataset=dataset,
+        # ping_start=1900,
+        bin_offset=200
+    )
+
+    exit()
+
     if dataset.exists():
         print("Loading processed dataset...")
         dataset.load_data_from_csv()
@@ -94,11 +102,11 @@ if __name__ == "__main__":
     if xtf_cfg['enabled']:
         if not dataset.sonar_xtf.exists():
             print("Processing Sonar Data into XTF file...")
-            export_to_xtf(dataset, xtf_cfg['sonar_name'], xtf_cfg['sample_dtype'])
+            export_xtf(dataset, xtf_cfg['sonar_name'], xtf_cfg['sample_dtype'])
 
         if not dataset.sonar_png.exists():
             print("Processing Sonar Data into PNG file...")
-            export_to_png(dataset, xtf_cfg['sample_dtype'])
+            export_png(dataset)
 
     registration = Registration(
         dataset,

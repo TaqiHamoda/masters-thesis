@@ -29,7 +29,7 @@ def gaussian_decay(x: float, sigma: float):
     return np.exp(-np.power(x, 2) / (2 * np.power(sigma, 2)))
 
 
-def export_to_texture(
+def export_texture(
     dataset: Dataset,
     slant_sigma: float,
     angle_sigma: float,
