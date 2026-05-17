@@ -7,10 +7,9 @@ def export_first_return(
     dataset: Dataset,
     bin_offset: int,
     k_size: int = 100,
-    lookahead: int = 5,
-    w_grad: float = 0.50,
+    w_grad: float = 0.45,
     w_idx_dist: float = 0.30,
-    w_nadir_dist: float = 0.20,
+    w_nadir_dist: float = 0.25,
 ):
     normalize = lambda x: (x - np.min(x)) / (np.max(x) - np.min(x) + 1e-5)
 
@@ -21,15 +20,14 @@ def export_first_return(
 
     first_returns = np.zeros((waterfall.shape[0], 2))
 
+    lookahead = k_size // 2
     middle = waterfall.shape[1] // 2
     bin_range = (middle - bin_offset, middle + bin_offset)
 
     gradient = np.zeros_like(waterfall, dtype=np.float32)
-    gradient[:, :bin_range[0]] = cv2.Sobel(waterfall[:, :bin_range[0]], ddepth=cv2.CV_32F, dx=1, dy=0)
-    gradient[:, bin_range[1]:] = np.flip(cv2.Sobel(np.flip(waterfall[:, bin_range[1]:], axis=1), ddepth=cv2.CV_32F, dx=1, dy=0), axis=1)
-    gradient = np.clip(-1 * gradient, 0, None)
-
-    waterfall = cv2.cvtColor(waterfall, cv2.COLOR_GRAY2BGR)
+    for d in range(lookahead, waterfall.shape[1] - lookahead):
+        gradient[:, d] = np.mean(waterfall[:, d - lookahead:d], axis=1) - np.mean(waterfall[:, d:d + lookahead], axis=1)
+        gradient[:, d] = np.power(gradient[:, d], 2)
 
     start_idx = waterfall.shape[0] // 2
 
@@ -39,21 +37,18 @@ def export_first_return(
     first_returns[start_idx, 0] = port_idx
     first_returns[start_idx, 1] = stbd_idx
 
+    waterfall = cv2.cvtColor(waterfall, cv2.COLOR_GRAY2BGR)
+
     def calculate_cost(start_bin, end_bin, i, index, history):
         dists = np.arange(start_bin, end_bin, dtype=np.float32)
 
         prev_dists = np.abs(dists - index)
         anchor_dists = np.abs(dists - np.median(history))
-        index_dists = normalize(np.power(0.6 * prev_dists + 0.4 * anchor_dists, 2))
+        index_dists = normalize(np.power(0.6 * prev_dists + 0.4 * anchor_dists, 10))
 
-        nadir_dists = normalize(np.abs(dists - middle))
+        nadir_dists = normalize(np.power(dists - middle, 10))
 
-        grads = 1 - normalize(gradient[i, start_bin:end_bin])
-        diffs = 1 - normalize([
-            np.power(np.mean(waterfall[i, j - lookahead:j, 0]) - np.mean(waterfall[i, j:j + lookahead, 0]), 2)
-            for j in range(start_bin, end_bin)
-        ])
-        grad_dists = 0.5 * grads + 0.5 * diffs
+        grad_dists = 1 - normalize(gradient[i, start_bin:end_bin])
 
         return w_grad * grad_dists + w_idx_dist * index_dists + w_nadir_dist * nadir_dists
 
@@ -74,7 +69,7 @@ def export_first_return(
             port_start = port_idx - start_bin
 
             start_bin = np.maximum(bin_range[1], stbd_idx - k_size)
-            end_bin = np.minimum(gradient.shape[1], stbd_idx + k_size)
+            end_bin = np.minimum(waterfall.shape[1], stbd_idx + k_size)
             stbd_costs = calculate_cost(start_bin, end_bin, i, stbd_idx, history[:, 1])
             stbd_start = stbd_idx - start_bin
 
