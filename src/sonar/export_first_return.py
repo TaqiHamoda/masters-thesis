@@ -7,9 +7,9 @@ def export_first_return(
     dataset: Dataset,
     bin_offset: int,
     k_size: int = 100,
-    w_grad: float = 0.45,
+    w_grad: float = 0.50,
     w_idx_dist: float = 0.30,
-    w_nadir_dist: float = 0.25,
+    w_nadir_dist: float = 0.20,
 ):
     normalize = lambda x: (x - np.min(x)) / (np.max(x) - np.min(x) + 1e-5)
 
@@ -20,7 +20,7 @@ def export_first_return(
 
     first_returns = np.zeros((waterfall.shape[0], 2))
 
-    lookahead = k_size // 2
+    lookahead = k_size
     middle = waterfall.shape[1] // 2
     bin_range = (middle - bin_offset, middle + bin_offset)
 
