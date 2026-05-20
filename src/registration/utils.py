@@ -86,6 +86,34 @@ def interpolate_poses(dataset: Dataset, reconstruction: pycolmap.Reconstruction)
     return camera_poses, sonar_poses
 
 
+def spatial_median(points: np.ndarray, max_iter: int = 100, tol: float = 1e-3) -> float:
+    """
+    Calculates the spatial median of a set of points using Weiszfeld's algorithm.
+    
+    Parameters:
+    - points: np.ndarray of shape (N, D)
+    - max_iter: Maximum number of iterations
+    - tol: Convergence tolerance (stop if the estimate moves less than this)
+    """    
+    prev = np.median(points, axis=0)
+
+    curr = prev
+    for _ in range(max_iter):
+        distances = np.linalg.norm(points - prev, axis=1)
+        distances[distances < tol] = tol
+            
+        weights = 1.0 / distances        
+        weights_sum = np.sum(weights)
+        
+        curr = np.sum(points * weights[:, np.newaxis], axis=0) / weights_sum
+        if np.linalg.norm(curr - prev) < tol:
+            break
+
+        prev = curr
+
+    return curr
+
+
 def get_image_geometry(reconstruction: pycolmap.Reconstruction, img_id: int) -> Tuple[np.ndarray, np.ndarray]:
     """
     Parameters:
@@ -152,6 +180,21 @@ def get_distances(pose: Pose, points: np.ndarray) -> np.ndarray:
     return np.linalg.norm(points - pose.get_position(), axis=1)
 
 
+def get_in_body_frame(pose: Pose, points: np.ndarray) -> np.ndarray:
+    """
+    Parameters:
+        pose: AUV pose object
+        points: np.ndarray that is nx3
+
+    Returns:
+        np.ndarray: An nx3 numpy array where each element is position of the point in the body frame.
+    """
+    ned_R_body = pose.get_rotation_matrix().T
+
+    v_ned = points - pose.get_position()
+    return (ned_R_body @ v_ned.T).T
+
+
 def get_corresponding_channels(pose: Pose, points: np.ndarray) -> np.ndarray:
     """
     Parameters:
@@ -161,10 +204,7 @@ def get_corresponding_channels(pose: Pose, points: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: An nx1 numpy array where each element is 0 for port or 1 for starboard.
     """
-    ned_R_body = pose.get_rotation_matrix().T
-
-    v_ned = points - pose.get_position()
-    v_body = (ned_R_body @ v_ned.T).T
+    v_body = get_in_body_frame(pose, points)
 
     # Check Y component distance in local frame. If positive, then starboard is closer
     # If negative, then port is closer.

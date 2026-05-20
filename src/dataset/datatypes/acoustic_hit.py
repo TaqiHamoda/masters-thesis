@@ -1,3 +1,4 @@
+import numpy as np
 from typing import Self, Dict, Any
 
 from .datatype import Datatype
@@ -31,6 +32,9 @@ class AcousticHit(Datatype):
         self.p_x = p_x
         self.p_y = p_y
         self.p_z = p_z
+
+    def get_point(self) -> np.ndarray:
+        np.array([self.p_x, self.p_y, self.p_z])
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> Self:

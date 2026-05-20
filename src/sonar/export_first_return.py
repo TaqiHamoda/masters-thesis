@@ -1,15 +1,16 @@
 import cv2
 import numpy as np
+
 from ..dataset import Dataset
 
 
 def export_first_return(
     dataset: Dataset,
-    bin_offset: int,
-    k_size: int = 100,
+    nadir_offset: int,
+    radius: int = 100,
     w_grad: float = 0.50,
-    w_idx_dist: float = 0.30,
-    w_nadir_dist: float = 0.20,
+    w_nadir: float = 0.20,
+    w_history: float = 0.30,
 ):
     normalize = lambda x: (x - np.min(x)) / (np.max(x) - np.min(x) + 1e-5)
 
@@ -20,13 +21,12 @@ def export_first_return(
 
     first_returns = np.zeros((waterfall.shape[0], 2))
 
-    lookahead = k_size
     middle = waterfall.shape[1] // 2
-    bin_range = (middle - bin_offset, middle + bin_offset)
+    bin_range = (middle - nadir_offset, middle + nadir_offset)
 
     gradient = np.zeros_like(waterfall, dtype=np.float32)
-    for d in range(lookahead, waterfall.shape[1] - lookahead):
-        gradient[:, d] = np.mean(waterfall[:, d - lookahead:d], axis=1) - np.mean(waterfall[:, d:d + lookahead], axis=1)
+    for d in range(radius, waterfall.shape[1] - radius):
+        gradient[:, d] = np.mean(waterfall[:, d - radius:d], axis=1) - np.mean(waterfall[:, d:d + radius], axis=1)
         gradient[:, d] = np.power(gradient[:, d], 2)
 
     start_idx = waterfall.shape[0] // 2
@@ -50,26 +50,26 @@ def export_first_return(
 
         grad_dists = 1 - normalize(gradient[i, start_bin:end_bin])
 
-        return w_grad * grad_dists + w_idx_dist * index_dists + w_nadir_dist * nadir_dists
+        return w_grad * grad_dists + w_history * index_dists + w_nadir * nadir_dists
 
     def detect_bottom_track(start, end, step):
         nonlocal port_idx, stbd_idx
 
         for i in range(start, end, step):
             if step > 0:
-                start_ping = max(start_idx, i - k_size)
+                start_ping = max(start_idx, i - radius)
                 history = first_returns[start_ping:i]
             else:
-                start_ping = min(start_idx, i + k_size)
+                start_ping = min(start_idx, i + radius)
                 history = first_returns[i + 1:start_ping + 1]
 
-            start_bin = np.maximum(0, port_idx - k_size)
-            end_bin = np.minimum(bin_range[0], port_idx + k_size)
+            start_bin = np.maximum(0, port_idx - radius)
+            end_bin = np.minimum(bin_range[0], port_idx + radius)
             port_costs = calculate_cost(start_bin, end_bin, i, port_idx, history[:, 0])
             port_start = port_idx - start_bin
 
-            start_bin = np.maximum(bin_range[1], stbd_idx - k_size)
-            end_bin = np.minimum(waterfall.shape[1], stbd_idx + k_size)
+            start_bin = np.maximum(bin_range[1], stbd_idx - radius)
+            end_bin = np.minimum(waterfall.shape[1], stbd_idx + radius)
             stbd_costs = calculate_cost(start_bin, end_bin, i, stbd_idx, history[:, 1])
             stbd_start = stbd_idx - start_bin
 
@@ -87,7 +87,7 @@ def export_first_return(
 
     # Find distance from nadir
     first_returns[:, 0] = middle - first_returns[:, 0]
-    first_returns[:, 1] = middle + first_returns[:, 1]
+    first_returns[:, 1] = first_returns[:, 1] - middle
 
     np.savez(dataset.first_return, data=np.flip(first_returns, axis=0))
     cv2.imwrite(str(dataset.first_return_png), waterfall)

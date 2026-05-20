@@ -60,7 +60,7 @@ if __name__ == "__main__":
     topics_cfg = cfg['topics']
     extrinsics_cfg = cfg['extrinsics']
     photogrammetry_cfg = cfg['photogrammetry']
-    xtf_cfg = cfg['process_acoustic']
+    sonar_cfg = cfg['sonar']
     registration_cfg = cfg['registration']
     decomposition_cfg = cfg['decomposition']
     visual_cfg = cfg['visualizations']
@@ -77,14 +77,6 @@ if __name__ == "__main__":
         sonar_trans=extrinsics_cfg['sonar'],
     )
 
-    export_first_return(
-        dataset=dataset,
-        # ping_start=1900,
-        bin_offset=200
-    )
-
-    exit()
-
     if dataset.exists():
         print("Loading processed dataset...")
         dataset.load_data_from_csv()
@@ -99,14 +91,24 @@ if __name__ == "__main__":
         photogrammetry = Photogrammetry(dataset, output_path=paths_cfg['output_path'])
         photogrammetry_pipeline(photogrammetry, photogrammetry_cfg)
 
-    if xtf_cfg['enabled']:
-        if not dataset.sonar_xtf.exists():
-            print("Processing Sonar Data into XTF file...")
-            export_xtf(dataset, xtf_cfg['sonar_name'], xtf_cfg['sample_dtype'])
+    if not dataset.sonar_xtf.exists():
+        print("Processing Sonar Data into XTF file...")
+        export_xtf(dataset, sonar_cfg['sonar_name'], sonar_cfg['sample_dtype'])
 
-        if not dataset.sonar_png.exists():
-            print("Processing Sonar Data into PNG file...")
-            export_png(dataset)
+    if not dataset.sonar_png.exists():
+        print("Processing Sonar Data into PNG file...")
+        export_png(dataset)
+
+    if not dataset.first_return.exists() or not dataset.first_return_png.exists():
+        print("Processing First Return Locations...")
+        export_first_return(
+            dataset=dataset,
+            nadir_offset=sonar_cfg["first_return"]["nadir_offset"],
+            radius=sonar_cfg["first_return"]["radius"],
+            w_grad=sonar_cfg["first_return"]["w_grad"],
+            w_nadir=sonar_cfg["first_return"]["w_nadir"],
+            w_history=sonar_cfg["first_return"]["w_history"],
+        )
 
     registration = Registration(
         dataset,
@@ -117,7 +119,8 @@ if __name__ == "__main__":
     )
 
     if registration_cfg['enabled']:
-        # registration.save_matches()
+        registration.optimize_extrinsics()
+        registration.save_matches()
         registration.save_vertices()
 
     if decomposition_cfg['enabled']:

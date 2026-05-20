@@ -54,6 +54,8 @@ class Dataset:
         self.reflectivity_vertices = self.sonar_dir / "vertices.npz"
         self.overlay_png = self.sonar_dir / "overlay.png"
 
+        self.extrinsics_file = self.output_path / "extrinsics.npz"
+
         self.mesh_dir = self.output_path / "mesh"
         self.mesh_dir.mkdir(parents=True, exist_ok=True)
 
