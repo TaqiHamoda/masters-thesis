@@ -1,6 +1,6 @@
+import cv2
 import numpy as np
 import open3d as o3d
-from sklearn import linear_model
 
 from typing import List, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -52,17 +52,29 @@ class Registration:
         self.scene = None
         self.vertices = None
 
+        self._optimized_poses = False
+
     def load_mesh(self):
-        # The RaycastingScene requires Open3D's Tensor-based mesh, so we convert the legacy mesh
-        self.mesh = o3d.io.read_triangle_mesh(str(self.dataset.mesh_ply))
-        self.mesh = o3d.t.geometry.TriangleMesh.from_legacy(self.mesh)
+        # TODO: Use trimesh to load vertex normals
 
-        self.scene = o3d.t.geometry.RaycastingScene()
-        self.scene.add_triangles(self.mesh)
+        if self.mesh is None:
+            # The RaycastingScene requires Open3D's Tensor-based mesh, so we convert the legacy mesh
+            self.mesh = o3d.io.read_triangle_mesh(str(self.dataset.mesh_ply))
+            self.mesh = o3d.t.geometry.TriangleMesh.from_legacy(self.mesh)
 
-        self.vertices = self.mesh.vertex.positions.numpy()
+        if self.scene is None:
+            self.scene = o3d.t.geometry.RaycastingScene()
+            self.scene.add_triangles(self.mesh)
+
+        if self.vertices is None:
+            self.vertices = self.mesh.vertex.positions.numpy()
+
+    def extrinsics_optimized(self) -> bool:
+        return self._optimized_poses
 
     def optimize_extrinsics(self):
+        self.load_mesh()
+
         if not self.dataset.extrinsics_file.exists():
             data = self.calculate_offsets()
         else:
@@ -81,6 +93,8 @@ class Registration:
 
             extrinsics = np.array((0, 0, z_delta))
             self.sss_poses[ts] = self.sss_poses[ts].translate(extrinsics)
+
+        self._optimized_poses = True
 
     def get_visible_points(self,
         ts: int,
@@ -209,7 +223,7 @@ class Registration:
             for i in range(len(hits))
         ]
     
-    def _calculate_offsets(self, ts: int) -> List[Tuple[float]]:
+    def _calculate_offsets(self, ts: int) -> List[Tuple[int, float, float, float, float]]:
         """
         Returns a 2x5 array where the rows are port and stbd and columns are:
         ping index, first return distance, observed distance, Z-axis distance
@@ -300,6 +314,9 @@ class Registration:
         VertexHit.to_csv(vertices_file, hits)
 
     def save_matches(self) -> None:
+        if not self.extrinsics_optimized():
+            self.optimize_extrinsics()
+
         images_ts = list(self.img_ids.keys())
         with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
             list(tqdm(
@@ -309,7 +326,8 @@ class Registration:
             ))
 
     def save_vertices(self) -> None:
-        self.load_mesh()
+        if not self.extrinsics_optimized():
+            self.optimize_extrinsics()
 
         sonars_ts = list(self.sss_poses.keys())
         with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
@@ -318,3 +336,60 @@ class Registration:
                 total=len(sonars_ts),
                 desc="Processing vertex hits"
             ))
+
+    def _synthesize_trajectory(self, ts: int, translation: np.ndarray) -> List[Tuple[int, int, int, float]]:
+        original = self.sss_poses[ts].get_position()
+        self.sss_poses[ts].x, self.sss_poses[ts].y, self.sss_poses[ts].z = original + translation
+        hits = self.get_vertices(ts)
+        self.sss_poses[ts].x, self.sss_poses[ts].y, self.sss_poses[ts].z = original
+
+        return [
+            (hit.hit.ping_idx, hit.hit.bin_idx, hit.vertex_idx, hit.hit.incidence_angle)
+            for hit in hits
+        ]
+
+    def synthesize_trajectory(self, translation: np.ndarray):
+        self.load_mesh()
+        sonars_ts = list(self.sss_poses.keys())
+
+        prop_loss = np.load(self.dataset.sonar_loss)["data"]
+        reflectivity = np.load(self.dataset.reflectivity_vertices)["data"]
+
+        waterfall = 0 * np.load(self.dataset.sonar_reflectivity)["data"]
+        counts = np.zeros_like(waterfall)
+
+        def populate_waterfall(data):
+            nonlocal waterfall, counts
+
+            for ping_idx, bin_idx, v_idx, theta in data:
+                if ping_idx >= waterfall.shape[0] or bin_idx >= waterfall.shape[1]:
+                    continue
+
+                counts[ping_idx, bin_idx] += 1
+                waterfall[ping_idx, bin_idx] = reflectivity[v_idx] * np.abs(np.cos(theta)) * prop_loss[bin_idx]
+
+        with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
+            list(tqdm(
+                executor.map(
+                    lambda ts: populate_waterfall(self._synthesize_trajectory(ts, translation)),
+                    sonars_ts
+                ),
+                total=len(sonars_ts),
+                desc="Synthesizing Trajectory"
+            ))
+
+        is_valid = counts > 0
+        waterfall[is_valid] /= counts[is_valid]
+
+        np.savez_compressed(self.dataset.synthetic_traj, data=waterfall)
+
+        waterfall = np.log1p(waterfall)
+        waterfall -= np.min(waterfall[is_valid])
+        waterfall /= np.max(waterfall)
+        waterfall = (255 * waterfall).astype(np.uint8)
+        waterfall = cv2.flip(waterfall, 0)
+
+        cv2.imwrite(
+            str(self.dataset.synthetic_img),
+            waterfall
+        )

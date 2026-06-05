@@ -1,15 +1,15 @@
 # General File Paths
 paths:
-  data_path: "data/"
+  data_path:   "data/"
   output_path: "output/"
 
 # ROS Topics
 topics:
-  img_topic: "/girona1000/flir_spinnaker_camera/image_raw/compressed"
-  odo_topic: "/girona1000/navigator/odometry"
-  info_topic: "/girona1000/flir_spinnaker_camera/camera_info"
+  img_topic:   "/girona1000/flir_spinnaker_camera/image_raw/compressed"
+  odo_topic:   "/girona1000/navigator/odometry"
+  info_topic:  "/girona1000/flir_spinnaker_camera/camera_info"
   sonar_topic: "/girona1000/marinesonic_scoutmkii_sidescan/snr2_data"
-  nav_topic: "/girona1000/navigator/navigation"
+  nav_topic:   "/girona1000/navigator/navigation"
 
 extrinsics:
   sonar_offset: [0.00, 0.10, 0.00]    # Translation from sonar center to transducer in meters (x, y, z)
@@ -23,7 +23,7 @@ photogrammetry:
     contrast_threshold: 0.002         # SIFT contrast threshold for feature detection (Default 0.0067)
     max_num_features: 8192            # Maximum number of SIFT features to detect (Default 8192)
     pos_std: [0.1, 0.1, 0.1]          # Standard deviation (weight) in meters of the position prior
-    max_distance: 10.0                # Maximum distance in meters for matching features between images
+    max_distance: 10.0                # Maximum distance in meters for spatial matching between images
 
   sparse:
     ba_global_ratio: 1.1              # The relative growth rates after which to perform global bundle adjustment (Default: 1.1)
@@ -42,15 +42,24 @@ photogrammetry:
     reduce_perc: 0.80                 # Percentage of faces to keep when simplifying the mesh (Default: 0.90)
     tex_size: 32768                   # Texture size for UV mapping (Default: 1024)
 
-process_acoustic:
-  enabled: false                      # Generates an XTF and a PNG using the SSS data
+sonar:                                # Generates an XTF and a PNG using the SSS data
   sonar_name: "ARC Scout Mk II"       # Name of the sonar for labeling outputs
   sample_dtype: uint16                # The sample datatype used (options: uint8, uint16, uint32, float32)
 
+  first_return:                       # Calculates the bin positions of the first returns for each ping
+    nadir_offset: 200                 # Radius in pixels of the nadir zone (bright column in the middle)
+    radius: 100                       # Radius of search window used (in pixels)
+    w_grad: 0.40                      # Weight of gradient signal in the cost function
+    w_nadir: 0.30                     # Weight used for distances from nadir in the cost function
+    w_history: 0.30                   # Weight used for distances from previous index position
+
 registration:
-  enabled: false                       # Perform cross-modal registration between sonar hits and optical images
-  num_threads: 8                      # Number of threads to use for parallel processing (Default: 6)
-  plane_thickness: 0.01               # Thickness of the plane in meters for matching sonar hits to photogrammetry points (Default: 0.01)
+  enabled: false                      # Perform cross-modal registration between sonar hits and optical images
+  num_threads: 24                     # Number of threads to use for parallel processing (Default: 6)
+  plane_thickness:                    # Thickness of the plane in meters for matching sonar hits to photogrammetry points (Default: 0.05)
+    optical: 0.01                     # Plane thickness for optical matching
+    vertex: 0.05                      # Plane thickness for vertex matching
+  w_size: 50                          # Matching window radius for correcting the offset between the geometry and the first return
   normal_vector: [1.0, 0.0, 0.0]      # Normal vector of the plane for matching sonar hits to photogrammetry points
                                       # Default assumes YZ plane fan (standard for Side-Scan Sonar)
 
@@ -58,8 +67,13 @@ decomposition:                        # Colormap used for reflectivity image is 
   enabled: false                      # Perform reflectivity decomposition of the sonar data (dependent on vertex registration)
   lower_percentile: 1                 # Lower percentile for reflectivity clipping in reflectivity image (Default: 1)
   upper_percentile: 99                # Upper percentile for reflectivity clipping in reflectivity image (Default: 99)
+  slant_sigma: 10                     # Standard deviation for slant distance weights calculated using Guassian Decay (Default: 10)
+  angle_sigma: 0.1963                 # Standard deviation for incidence angle weights calculated using Guassian Decay (Default: PI/16)
+  angle_center: 0.7854                # Mean value used for incidence angle weights calculated using Guassian Decay (Default: PI/4)
+
+synthesize:
+  enabled: false                      # Synthesize SSS imagery using the existing vehicle trajectory
+  translation: [0.0, 0.0, 0.0]        # Global translation applied to the trajectory before processing
 
 visualizations:
-  optical_matching: false             # Enable optical registration visualization (Requires sonar png and optical matches)
-  vertex_matching: false              # Enable vertex registration visualization (Requires sonar png and vertex matches)
-  reflectivity_decomposition: false   # Enable reflectivity decomposition visualization (Requires sonar png and reflectivity decomposition)
+  enabled: true                       # Enable optical registration visualization (Requires sonar png, optical matches, and vertex reflectivity)

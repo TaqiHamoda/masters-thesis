@@ -1,3 +1,5 @@
+import numpy as np
+
 import yaml
 from time import perf_counter, sleep
 
@@ -6,7 +8,7 @@ from src.photogrammetry import Photogrammetry
 from src.sonar import export_xtf, export_png, export_first_return
 from src.registration import Registration
 from src.decomposition import Decomposition
-from src.visualization import MatchVisualizer, VertexVisualizer
+from src.visualization import MatchVisualizer
 
 
 def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
@@ -63,6 +65,7 @@ if __name__ == "__main__":
     sonar_cfg = cfg['sonar']
     registration_cfg = cfg['registration']
     decomposition_cfg = cfg['decomposition']
+    synthesize_cfg = cfg['synthesize']
     visual_cfg = cfg['visualizations']
 
     dataset = Dataset(
@@ -110,34 +113,62 @@ if __name__ == "__main__":
             w_history=sonar_cfg["first_return"]["w_history"],
         )
 
-    registration = Registration(
-        dataset,
-        sonar_offset=extrinsics_cfg['sonar_offset'],
-        thickness=registration_cfg['plane_thickness'],
-        n_local=registration_cfg['normal_vector'],
-        num_threads=registration_cfg['num_threads'],
-    )
-
     if registration_cfg['enabled']:
-        registration.optimize_extrinsics()
-        registration.save_matches()
-        registration.save_vertices()
+        Registration(
+            dataset,
+            sonar_offset=extrinsics_cfg['sonar_offset'],
+            thickness=registration_cfg['plane_thickness']['optical'],
+            n_local=registration_cfg['normal_vector'],
+            num_threads=registration_cfg['num_threads'],
+            w_size=registration_cfg['w_size']
+        ).save_matches()
+
+        Registration(
+            dataset,
+            sonar_offset=extrinsics_cfg['sonar_offset'],
+            thickness=registration_cfg['plane_thickness']['vertex'],
+            n_local=registration_cfg['normal_vector'],
+            num_threads=registration_cfg['num_threads'],
+            w_size=registration_cfg['w_size']
+        ).save_vertices()
 
     if decomposition_cfg['enabled']:
-        decomposition = Decomposition(dataset)
-        if not dataset.sonar_angles.exists() or not dataset.sonar_reflectivity.exists():
-            print("Performing component decomposition...")
-            decomposition.process_decomposition()
-            decomposition.print_stats()
-
-        print("Saving reflectivity image...")
-        decomposition.save_reflectivity_image(
+        decomposition = Decomposition(
+            dataset,
             lower=decomposition_cfg['lower_percentile'],
             upper=decomposition_cfg['upper_percentile']
         )
 
-    if visual_cfg['optical_matching']:
-        MatchVisualizer(dataset, registration).run()
+        print("Performing component decomposition...")
+        decomposition.process_decomposition()
+        decomposition.print_stats()
 
-    if visual_cfg['vertex_matching']:
-        VertexVisualizer(dataset, registration).run()
+        print("Saving reflectivity image and mesh...")
+        decomposition.save_reflectivity_image()
+        decomposition.save_reflectivity_mesh(
+            slant_sigma=decomposition_cfg['slant_sigma'],
+            angle_sigma=decomposition_cfg['angle_sigma'],
+            angle_center=decomposition_cfg['angle_center']
+        )
+
+    if synthesize_cfg['enabled']:
+        Registration(
+            dataset,
+            sonar_offset=extrinsics_cfg['sonar_offset'],
+            thickness=registration_cfg['plane_thickness']['vertex'],
+            n_local=registration_cfg['normal_vector'],
+            num_threads=registration_cfg['num_threads'],
+            w_size=registration_cfg['w_size']
+        ).synthesize_trajectory(synthesize_cfg['translation'])
+
+    if visual_cfg['enabled']:
+        MatchVisualizer(dataset,
+            Registration(
+                dataset,
+                sonar_offset=extrinsics_cfg['sonar_offset'],
+                thickness=registration_cfg['plane_thickness']['optical'],
+                n_local=registration_cfg['normal_vector'],
+                num_threads=registration_cfg['num_threads'],
+                w_size=registration_cfg['w_size']
+            )
+        ).run()

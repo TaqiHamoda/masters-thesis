@@ -38,7 +38,6 @@ class Dataset:
 
         self.cameras_csv = self.output_path / "camera_poses.csv"
         self.sonar_csv = self.output_path / "sonar_poses.csv"
-        self.corrected_csv = self.output_path / "corrected_matches.csv"
 
         self.sonar_dir = self.output_path / "sonar"
         self.sonar_dir.mkdir(parents=True, exist_ok=True)
@@ -47,21 +46,24 @@ class Dataset:
         self.sonar_xtf = self.sonar_dir / "sonar.xtf"
         self.sonar_png = self.sonar_dir / "sonar.png"
         self.sonar_angles = self.sonar_dir / "angles.npz"
+        self.sonar_loss = self.sonar_dir / "loss.npz"
         self.sonar_reflectivity = self.sonar_dir / "reflectivity.npz"
         self.first_return = self.sonar_dir / "first_return.npz"
         self.first_return_png = self.sonar_dir / "first_return.png"
         self.reflectivity_png = self.sonar_dir / "reflectivity.png"
-        self.reflectivity_vertices = self.sonar_dir / "vertices.npz"
+        self.reflectivity_vertices = self.sonar_dir / "vertex_reflectivity.npz"
         self.overlay_png = self.sonar_dir / "overlay.png"
 
         self.extrinsics_file = self.output_path / "extrinsics.npz"
+        self.synthetic_traj = self.output_path / "synthetic.npz"
+        self.synthetic_img = self.output_path / "synthetic.png"
 
         self.mesh_dir = self.output_path / "mesh"
         self.mesh_dir.mkdir(parents=True, exist_ok=True)
 
         self.mesh_ply = self.mesh_dir / "mesh.ply"
         self.mesh_texture = self.mesh_dir / "texture.png"
-        self.reflectivity_texture = self.mesh_dir / "reflectivity.png"
+        self.reflectivity_mesh = self.mesh_dir / "reflectivity_mesh.ply"
 
         self.image_dir = self.output_path / "images"
         self.image_dir.mkdir(parents=True, exist_ok=True)

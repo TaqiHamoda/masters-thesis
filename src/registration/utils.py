@@ -226,6 +226,7 @@ def get_incidence_angles(pose: Pose, points: np.ndarray, eps: float = 1e-6) -> n
     ned_R_body = pose.get_rotation_matrix().T
     v_body = (ned_R_body @ v_ned.T).T
 
+    # TODO: Use vertex normal instead of assuming a flat plane parallel to the seafloor.
     opposite = np.abs(v_ned[:, 2])   # Depth/Z difference
     adjacent = np.abs(v_body[:, 1])  # Cross-track/Y difference in body frame
 
