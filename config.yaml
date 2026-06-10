@@ -65,8 +65,8 @@ registration:
 
 decomposition:                        # Colormap used for reflectivity image is OpenCV's RAINBOW.
   enabled: false                      # Perform reflectivity decomposition of the sonar data (dependent on vertex registration)
-  lower_percentile: 1                 # Lower percentile for reflectivity clipping in reflectivity image (Default: 1)
-  upper_percentile: 99                # Upper percentile for reflectivity clipping in reflectivity image (Default: 99)
+  lower_percentile: 0                 # Lower percentile for reflectivity clipping in reflectivity image (Default: 1)
+  upper_percentile: 90                # Upper percentile for reflectivity clipping in reflectivity image (Default: 99)
   slant_sigma: 10                     # Standard deviation for slant distance weights calculated using Guassian Decay (Default: 10)
   angle_sigma: 0.1963                 # Standard deviation for incidence angle weights calculated using Guassian Decay (Default: PI/16)
   angle_center: 0.7854                # Mean value used for incidence angle weights calculated using Guassian Decay (Default: PI/4)
