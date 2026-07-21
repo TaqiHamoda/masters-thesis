@@ -51,12 +51,11 @@ class Registration:
         self.mesh = None
         self.scene = None
         self.vertices = None
+        self.normals = None
 
         self._optimized_poses = False
 
     def load_mesh(self):
-        # TODO: Use trimesh to load vertex normals
-
         if self.mesh is None:
             # The RaycastingScene requires Open3D's Tensor-based mesh, so we convert the legacy mesh
             self.mesh = o3d.io.read_triangle_mesh(str(self.dataset.mesh_ply))
@@ -68,6 +67,9 @@ class Registration:
 
         if self.vertices is None:
             self.vertices = self.mesh.vertex.positions.numpy()
+
+        if self.normals is None:
+            self.normals = self.mesh.vertex.normals.numpy()
 
     def extrinsics_optimized(self) -> bool:
         return self._optimized_poses
@@ -136,7 +138,7 @@ class Registration:
         inters[inters] = hit_distances >= distances.reshape(-1) - eps
         return np.flatnonzero(inters)
     
-    def get_geometry(self, ts: int, points: np.ndarray):
+    def get_geometry(self, ts: int, points: np.ndarray, normals: np.ndarray):
         pose = self.sss_poses[ts]
         sss = self.dataset.sonar[ts]
 
@@ -145,7 +147,7 @@ class Registration:
         offsets = (pose.get_rotation_matrix() @ local_offsets.T).T  # Transform offsets to world frame
 
         distances = get_distances(pose, points - offsets)
-        incidence_angles = get_incidence_angles(pose, points - offsets)
+        incidence_angles = get_incidence_angles(pose, points - offsets, normals)
 
         bins = sss.num_samples * distances / sss.slant_range
         bins = sss.num_samples + np.power(-1, 1 - channels) * bins
@@ -153,7 +155,7 @@ class Registration:
 
         return channels, local_offsets, offsets, distances, incidence_angles, bins
 
-    def get_hits(self, ts: int, points: np.ndarray) -> List[AcousticHit]:
+    def get_hits(self, ts: int, points: np.ndarray, normals: np.ndarray) -> List[AcousticHit]:
         pose = self.sss_poses[ts]
         sss = self.dataset.sonar[ts]
 
@@ -162,7 +164,7 @@ class Registration:
         offsets,
         distances,
         incidence_angles,
-        bins) = self.get_geometry(ts, points)
+        bins) = self.get_geometry(ts, points, normals)
 
         return [
             AcousticHit(
@@ -195,9 +197,10 @@ class Registration:
                 continue
 
             p_inters = points_3d[is_valid]
+            n_inters = np.ones_like(p_inters)  # Placeholder normals, not used in this context
             o_inters = points_2d[is_valid]
 
-            hits = self.get_hits(s_ts, p_inters)
+            hits = self.get_hits(s_ts, p_inters, n_inters)
             for i in range(len(hits)):
                 matches.append(ImageHit(
                     hit=hits[i],
@@ -213,7 +216,8 @@ class Registration:
             return []
 
         vertices = self.vertices[is_valid]
-        hits = self.get_hits(ts, vertices)
+        normals = self.normals[is_valid]
+        hits = self.get_hits(ts, vertices, normals)
 
         return [
             VertexHit(
@@ -237,13 +241,14 @@ class Registration:
             return []
 
         v_points = self.vertices[is_valid]
+        v_normals = self.normals[is_valid]
 
         (channels,
         local_offsets,
         offsets,
         distances,
         incidence_angles,
-        bins) = self.get_geometry(ts, v_points)
+        bins) = self.get_geometry(ts, v_points, v_normals)
 
         max_dist = np.max(distances)
         port_idx = np.argmin(distances + max_dist * (channels != 0))

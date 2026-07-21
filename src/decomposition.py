@@ -2,6 +2,8 @@ import cv2
 import numpy as np
 import open3d as o3d
 
+from plyfile import PlyData, PlyElement
+
 from typing import Tuple
 from tqdm import tqdm
 
@@ -130,6 +132,9 @@ class Decomposition:
         # Docs: https://www.open3d.org/docs/release/python_api/open3d.geometry.TriangleMesh.html
         mesh = o3d.io.read_triangle_mesh(str(self.dataset.mesh_ply))
         vertices = np.asarray(mesh.vertices)
+        normals = np.asarray(mesh.vertex_normals)
+        colors = np.clip(255 * np.asarray(mesh.vertex_colors), 0, 255).astype(np.uint8)
+        faces = np.asarray(mesh.triangles)
 
         n = vertices.shape[0]
         v_weights = np.zeros((n,), dtype=np.float32)
@@ -161,12 +166,36 @@ class Decomposition:
         v_reflectivity[valid_mask] /= v_weights[valid_mask]
         np.savez(self.dataset.reflectivity_vertices, data=v_reflectivity)
 
-        # TODO: Use Trimesh instead to save vertex attributes. Open3D doesn't support PLY that well
-        # TODO: Save the propogation loss values as well in the ply
-        v_reflectivity = np.log1p(v_reflectivity)
-        t_mesh = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
-        t_mesh.vertex["reflectivity"] = o3d.core.Tensor(
-            v_reflectivity.astype(np.float32), 
-            device=o3d.core.Device("CPU:0")
-        )
-        o3d.t.io.write_triangle_mesh(str(self.dataset.reflectivity_mesh), t_mesh)
+        # Define structured array for vertices including 'quality'
+        vertex_dtype = [
+            ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),           # XYZ coordinates
+            ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),        # Normals
+            ('red', 'u1'), ('green', 'u1'), ('blue', 'u1'),  # Colors
+            ('quality', 'f4')                                # Reflectivity
+        ]
+
+        # Extract and populate vertex data
+        vertex_data = np.empty(n, dtype=vertex_dtype)
+        vertex_data['x'] = vertices[:, 0]
+        vertex_data['y'] = vertices[:, 1]
+        vertex_data['z'] = vertices[:, 2]
+        vertex_data['nx'] = normals[:, 0]
+        vertex_data['ny'] = normals[:, 1]
+        vertex_data['nz'] = normals[:, 2]
+        vertex_data['red'] = colors[:, 0]
+        vertex_data['green'] = colors[:, 1]
+        vertex_data['blue'] = colors[:, 2]
+        vertex_data['quality'] = v_reflectivity
+
+        ply_vertex = PlyElement.describe(vertex_data, 'vertex')
+        ply_elements = [ply_vertex]
+
+        # Extract and format faces
+        face_dtype = [('vertex_indices', 'i4', (3,))]  # plyfile expects list properties to be formatted with a fixed inner shape like (3,)
+        face_data = np.empty(len(faces), dtype=face_dtype)
+        face_data['vertex_indices'] = faces
+
+        ply_face = PlyElement.describe(face_data, 'face')
+        ply_elements.append(ply_face)
+
+        PlyData(ply_elements, text=False).write(str(self.dataset.reflectivity_mesh))

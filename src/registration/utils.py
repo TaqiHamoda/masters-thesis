@@ -211,23 +211,22 @@ def get_corresponding_channels(pose: Pose, points: np.ndarray) -> np.ndarray:
     return np.astype(v_body[:, 1] > 0, int)
 
 
-def get_incidence_angles(pose: Pose, points: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+def get_incidence_angles(pose: Pose, points: np.ndarray, normals: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     """
     Parameters:
         pose: AUV pose object
         points: np.ndarray that is nx3
+        normals: np.ndarray that is nx3
 
     Returns:
         np.ndarray: An nx1 numpy array where each element is the incidence angle in radians.
     """
     v_ned = points - pose.get_position()
 
-    # Rotate to Body frame to get correct cross-track distance
-    ned_R_body = pose.get_rotation_matrix().T
-    v_body = (ned_R_body @ v_ned.T).T
+    v_ned_unit = v_ned / (np.linalg.norm(v_ned, axis=1, keepdims=True) + eps)
+    normals_unit = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + eps)
 
-    # TODO: Use vertex normal instead of assuming a flat plane parallel to the seafloor.
-    opposite = np.abs(v_ned[:, 2])   # Depth/Z difference
-    adjacent = np.abs(v_body[:, 1])  # Cross-track/Y difference in body frame
+    cos_theta = np.sum(v_ned_unit * normals_unit, axis=1)
 
-    return np.arctan(adjacent / (opposite + eps))
+    # We only care about angles between 0 and 90 degrees
+    return np.arccos(np.clip(cos_theta, 0.0, 1.0))

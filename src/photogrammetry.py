@@ -169,6 +169,12 @@ class Photogrammetry:
             preservetopology=True
         )
 
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_normal_per_vertex
+        ms.apply_filter(
+            'compute_normal_per_vertex',
+            weightmode="By Angle"
+        )
+
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texcoord_parametrization_triangle_trivial_per_wedge
         ms.apply_filter(
             'compute_texcoord_parametrization_triangle_trivial_per_wedge',
@@ -182,7 +188,11 @@ class Photogrammetry:
             textw=tex_size, texth=tex_size
         )
 
-        ms.save_current_mesh(str(self.dataset.mesh_ply))
+        # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
+        ms.save_current_mesh(
+            str(self.dataset.mesh_ply),
+            save_vertex_normal=True,
+        )
 
     @staticmethod
     def has_cuda() -> bool:

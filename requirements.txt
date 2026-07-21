@@ -9,4 +9,5 @@ pyyaml
 pymeshlab
 pyxtf
 open3d
+plyfile
 viser
