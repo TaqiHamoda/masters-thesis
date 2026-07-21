@@ -45,7 +45,7 @@ def photogrammetry_pipeline(photogrammetry: Photogrammetry, cfg: dict):
         print(f"Dense completed in {perf_counter() - start_time:.2f}s")
 
     # Mesh Creation
-    if not photogrammetry.mesh_ply.exists():
+    if not photogrammetry.dataset.mesh_ply.exists():
         print("Creating mesh...")
         start_time = perf_counter()
         photogrammetry.create_mesh(**cfg['mesh'])
