@@ -144,11 +144,7 @@ class Photogrammetry:
 
         pycolmap.stereo_fusion(self.fused_ply, self.workspace_path, options=fusion_options, output_type="ply")
 
-    def create_mesh(self,
-        mesh_depth: int = 8,
-        reduce_perc: float = 90.0,
-        tex_size: int = 1024
-    ):
+    def create_mesh(self, mesh_depth: int = 8):
         if not self.fused_ply.exists():
             raise ValueError("Dense reconstruction outputs not found. Please run dense reconstruction before meshing.")
 
@@ -158,34 +154,14 @@ class Photogrammetry:
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#generate_surface_reconstruction_screened_poisson
         ms.apply_filter(
             'generate_surface_reconstruction_screened_poisson',
-            depth=mesh_depth
-        )
-
-        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#meshing_decimation_quadric_edge_collapse
-        ms.apply_filter(
-            'meshing_decimation_quadric_edge_collapse',
-            targetperc=reduce_perc,
-            preservenormal=True,
-            preservetopology=True
+            depth=mesh_depth,
+            preclean=True
         )
 
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_normal_per_vertex
         ms.apply_filter(
             'compute_normal_per_vertex',
             weightmode="By Angle"
-        )
-
-        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texcoord_parametrization_triangle_trivial_per_wedge
-        ms.apply_filter(
-            'compute_texcoord_parametrization_triangle_trivial_per_wedge',
-            textdim=tex_size
-        )
-
-        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texmap_from_color
-        ms.apply_filter(
-            'compute_texmap_from_color',
-            textname=self.dataset.mesh_texture.name,
-            textw=tex_size, texth=tex_size
         )
 
         # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters

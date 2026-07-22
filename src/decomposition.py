@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import open3d as o3d
 
+import pymeshlab
 from plyfile import PlyData, PlyElement
 
 from typing import Tuple
@@ -94,9 +95,6 @@ class Decomposition:
             np.percentile(reflectivity[is_valid], self.lower),
             np.percentile(reflectivity[is_valid], self.upper)
         )
-
-        # Use logarithmic scale to amplify variations in reflectivity
-        reflectivity = np.log1p(reflectivity)
 
         # Normalize reflectivity values
         reflectivity -= np.min(reflectivity[is_valid])
@@ -198,4 +196,50 @@ class Decomposition:
         ply_face = PlyElement.describe(face_data, 'face')
         ply_elements.append(ply_face)
 
-        PlyData(ply_elements, text=False).write(str(self.dataset.reflectivity_mesh))
+        PlyData(ply_elements, text=False).write(str(self.dataset.mesh_ply))
+
+    def generate_texture_maps(self, face_num: int, tex_size: int) -> None:
+        ms = pymeshlab.MeshSet()
+        ms.load_new_mesh(str(self.dataset.mesh_ply))
+
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#meshing_decimation_quadric_edge_collapse
+        ms.apply_filter(
+            'meshing_decimation_quadric_edge_collapse',
+            targetfacenum=face_num,
+            preservenormal=True,
+            preservetopology=True
+        )
+
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texcoord_parametrization_triangle_trivial_per_wedge
+        ms.apply_filter(
+            'compute_texcoord_parametrization_triangle_trivial_per_wedge',
+            textdim=tex_size
+        )
+
+        ms.load_new_mesh(str(self.dataset.mesh_ply))
+
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#transfer_attributes_to_texture_per_vertex
+        for attribute, name in [
+            (0, self.dataset.colors_texture.name),
+            (1, self.dataset.normals_texture.name),
+            (2, self.dataset.reflectivity_texture.name)
+        ]:
+            ms.apply_filter(
+                'transfer_attributes_to_texture_per_vertex',
+                sourcemesh=1,
+                targetmesh=0,
+                attributeenum=attribute,
+                textname=name,
+                textw=tex_size,
+                texth=tex_size
+            )
+
+        # https://pymeshlab.readthedocs.io/en/latest/classes/meshset.html#pmeshlab.MeshSet.set_current_mesh
+        ms.set_current_mesh(0)
+
+        # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
+        ms.save_current_mesh(
+            str(self.dataset.output_mesh),
+            save_textures=True,
+            save_vertex_normal=True,
+        )

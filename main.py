@@ -150,6 +150,10 @@ if __name__ == "__main__":
             angle_sigma=decomposition_cfg['angle_sigma'],
             angle_center=decomposition_cfg['angle_center']
         )
+        decomposition.generate_texture_maps(
+            face_num=decomposition_cfg['face_count'],
+            tex_size=decomposition_cfg['texture_size']
+        )
 
     if synthesize_cfg['enabled']:
         Registration(

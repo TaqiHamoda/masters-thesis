@@ -39,8 +39,6 @@ photogrammetry:
 
   mesh:
     mesh_depth: 12                    # Depth parameter for Poisson surface resolution (Default: 8)
-    reduce_perc: 0.80                 # Percentage of faces to keep when simplifying the mesh (Default: 0.90)
-    tex_size: 32768                   # Texture size for UV mapping (Default: 1024)
 
 sonar:                                # Generates an XTF and a PNG using the SSS data
   sonar_name: "ARC Scout Mk II"       # Name of the sonar for labeling outputs
@@ -65,11 +63,13 @@ registration:
 
 decomposition:                        # Colormap used for reflectivity image is OpenCV's RAINBOW.
   enabled: false                      # Perform reflectivity decomposition of the sonar data (dependent on vertex registration)
-  lower_percentile: 0                 # Lower percentile for reflectivity clipping in reflectivity image (Default: 1)
-  upper_percentile: 90                # Upper percentile for reflectivity clipping in reflectivity image (Default: 99)
+  lower_percentile: 1                 # Lower percentile for reflectivity clipping in reflectivity image (Default: 1)
+  upper_percentile: 99                # Upper percentile for reflectivity clipping in reflectivity image (Default: 99)
   slant_sigma: 10                     # Standard deviation for slant distance weights calculated using Guassian Decay (Default: 10)
   angle_sigma: 0.1963                 # Standard deviation for incidence angle weights calculated using Guassian Decay (Default: PI/16)
   angle_center: 0.7854                # Mean value used for incidence angle weights calculated using Guassian Decay (Default: PI/4)
+  face_count: 7000000                 # Maximum number of faces to keep when simplifying the mesh (Default: 7000000)
+  texture_size: 8192                  # Texture size for UV mapping for colors, normals, and reflectivity (Default: 1024)
 
 synthesize:
   enabled: false                      # Synthesize SSS imagery using the existing vehicle trajectory

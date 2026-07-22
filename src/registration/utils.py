@@ -228,5 +228,5 @@ def get_incidence_angles(pose: Pose, points: np.ndarray, normals: np.ndarray, ep
 
     cos_theta = np.sum(v_ned_unit * normals_unit, axis=1)
 
-    # We only care about angles between 0 and 90 degrees
+    # We only care about angles between 0 and pi/2
     return np.arccos(np.clip(cos_theta, 0.0, 1.0))
