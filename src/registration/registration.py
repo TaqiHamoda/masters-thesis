@@ -77,10 +77,7 @@ class Registration:
     def optimize_extrinsics(self):
         self.load_mesh()
 
-        if not self.dataset.extrinsics_file.exists():
-            data = self.calculate_offsets()
-        else:
-            data = np.load(self.dataset.extrinsics_file)["data"]
+        data = self.calculate_offsets()
 
         indices = data[:, 0]
         for ts in tqdm(list(self.sss_poses.keys()), desc="Optimizing Extrinsics"):
@@ -282,19 +279,12 @@ class Registration:
 
         data = []
         with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-            list(tqdm(
-                executor.map(
-                    lambda ts: data.extend(self._calculate_offsets(ts)),
-                    sonars_ts
-                ),
-                total=len(sonars_ts),
-                desc="Calculating offsets per ping"
-            ))
+            executor.map(
+                lambda ts: data.extend(self._calculate_offsets(ts)),
+                sonars_ts
+            )
 
-        data = np.array(data)
-        np.savez_compressed(self.dataset.extrinsics_file, data=data)
-
-        return data
+        return np.array(data)
 
     def _save_matches(self, ts: int) -> None:
         matches_file = self.dataset.image_matches_dir / f"{ts}.csv"

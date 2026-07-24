@@ -54,7 +54,6 @@ class Dataset:
         self.reflectivity_vertices = self.sonar_dir / "vertex_reflectivity.npz"
         self.overlay_png = self.sonar_dir / "overlay.png"
 
-        self.extrinsics_file = self.output_path / "extrinsics.npz"
         self.synthetic_traj = self.output_path / "synthetic.npz"
         self.synthetic_img = self.output_path / "synthetic.png"
 

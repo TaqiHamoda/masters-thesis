@@ -76,4 +76,4 @@ synthesize:
   translation: [0.0, 0.0, 0.0]        # Global translation applied to the trajectory before processing
 
 visualizations:
-  enabled: true                       # Enable optical registration visualization (Requires sonar png, optical matches, and vertex reflectivity)
+  enabled: false                       # Enable optical registration visualization (Requires sonar png, optical matches, and vertex reflectivity)

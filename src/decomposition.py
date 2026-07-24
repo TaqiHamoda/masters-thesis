@@ -37,13 +37,14 @@ class Decomposition:
 
         return angles, is_valid
 
-    def get_decomposition(self) -> Tuple[np.ndarray, np.ndarray]:
+    def get_decomposition(self, eps=1e-6) -> Tuple[np.ndarray, np.ndarray]:
         """Returns the incidence angle map and reflectivity map based on the vertex hits."""
         angles, is_valid = self.get_incidence_angle_map()
         reflectivity = np.zeros_like(self.waterfall, dtype=np.float32)
 
         # Factor out incidence angle to get reflectivity
-        reflectivity[is_valid] = self.waterfall[is_valid] / np.cos(angles[is_valid])
+        cos_angle = np.clip(np.cos(angles[is_valid]), 0, 1) + eps
+        reflectivity[is_valid] = self.waterfall[is_valid] / cos_angle
 
         # Normalize by mean reflectivity per column to factor out range dependence
         col_sums = np.sum(reflectivity, axis=0)
@@ -51,6 +52,9 @@ class Decomposition:
         prop_loss = np.divide(col_sums, col_counts, out=np.ones_like(col_sums), where=col_counts > 0)
 
         reflectivity /= prop_loss
+
+        angles[~is_valid] = np.nan
+        reflectivity[~is_valid] = np.nan
 
         return angles, prop_loss, reflectivity
 
@@ -63,7 +67,7 @@ class Decomposition:
 
     def print_stats(self) -> None:
         reflectivity = np.load(self.dataset.sonar_reflectivity)["data"]
-        data = reflectivity[reflectivity > 0]
+        data = reflectivity[~np.isnan(reflectivity)]
         stats = {
             "Min": np.min(data),
             "1st %": np.percentile(data, 1),
@@ -89,7 +93,7 @@ class Decomposition:
     def save_reflectivity_image(self) -> None:
         reflectivity = np.load(self.dataset.sonar_reflectivity)["data"]
 
-        is_valid = reflectivity > 0
+        is_valid = ~np.isnan(reflectivity)
         reflectivity[is_valid] = np.clip(
             reflectivity[is_valid],
             np.percentile(reflectivity[is_valid], self.lower),
@@ -98,11 +102,11 @@ class Decomposition:
 
         # Normalize reflectivity values
         reflectivity -= np.min(reflectivity[is_valid])
-        reflectivity /= np.max(reflectivity)
+        reflectivity /= np.max(reflectivity[is_valid])
         reflectivity[~is_valid] = 0
 
         reflectivity = (255 * reflectivity).astype(np.uint8)
-        reflectivity = cv2.applyColorMap(reflectivity, cv2.COLORMAP_RAINBOW)
+        reflectivity = cv2.applyColorMap(reflectivity, cv2.COLORMAP_PARULA)
         reflectivity[~is_valid] = (0, 0, 0)  # Set Invalid to black
 
         # Flip to match PNG outputted from XTF orientation
@@ -141,7 +145,8 @@ class Decomposition:
         reflectivity = np.load(self.dataset.sonar_reflectivity)["data"]
 
         # Clip reflectivity values to remove outliers
-        is_valid = reflectivity > 0
+        is_valid = ~np.isnan(reflectivity)
+        reflectivity[~is_valid] = 0
         reflectivity[is_valid] = np.clip(
             reflectivity[is_valid],
             np.percentile(reflectivity[is_valid], self.lower),
@@ -213,16 +218,18 @@ class Decomposition:
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texcoord_parametrization_triangle_trivial_per_wedge
         ms.apply_filter(
             'compute_texcoord_parametrization_triangle_trivial_per_wedge',
-            textdim=tex_size
+            textdim=tex_size,
+            border=1
         )
 
         ms.load_new_mesh(str(self.dataset.mesh_ply))
+        ms.set_current_mesh(0)
 
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#transfer_attributes_to_texture_per_vertex
         for attribute, name in [
-            (0, self.dataset.colors_texture.name),
-            (1, self.dataset.normals_texture.name),
             (2, self.dataset.reflectivity_texture.name)
+            (1, self.dataset.normals_texture.name),
+            (0, self.dataset.colors_texture.name),
         ]:
             ms.apply_filter(
                 'transfer_attributes_to_texture_per_vertex',
@@ -234,12 +241,9 @@ class Decomposition:
                 texth=tex_size
             )
 
-        # https://pymeshlab.readthedocs.io/en/latest/classes/meshset.html#pmeshlab.MeshSet.set_current_mesh
-        ms.set_current_mesh(0)
-
-        # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
-        ms.save_current_mesh(
-            str(self.dataset.output_mesh),
-            save_textures=True,
-            save_vertex_normal=True,
-        )
+            # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
+            ms.save_current_mesh(
+                str(self.dataset.output_mesh),
+                save_textures=True,
+                save_vertex_normal=True,
+            )
