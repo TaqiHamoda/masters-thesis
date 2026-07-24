@@ -90,10 +90,6 @@ if __name__ == "__main__":
         dataset.inspect_bags()
         dataset.data_stats()
 
-    if photogrammetry_cfg['enabled']:
-        photogrammetry = Photogrammetry(dataset, output_path=paths_cfg['output_path'])
-        photogrammetry_pipeline(photogrammetry, photogrammetry_cfg)
-
     if not dataset.sonar_xtf.exists():
         print("Processing Sonar Data into XTF file...")
         export_xtf(dataset, sonar_cfg['sonar_name'], sonar_cfg['sample_dtype'])
@@ -112,6 +108,10 @@ if __name__ == "__main__":
             w_nadir=sonar_cfg["first_return"]["w_nadir"],
             w_history=sonar_cfg["first_return"]["w_history"],
         )
+
+    if photogrammetry_cfg['enabled']:
+        photogrammetry = Photogrammetry(dataset, output_path=paths_cfg['output_path'])
+        photogrammetry_pipeline(photogrammetry, photogrammetry_cfg)
 
     if registration_cfg['enabled']:
         Registration(
