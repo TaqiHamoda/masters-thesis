@@ -11,6 +11,82 @@ from tqdm import tqdm
 from .dataset import Dataset, VertexHit
 
 
+def float32_to_rgb(data: np.ndarray) -> np.ndarray:
+    """
+    Encodes float32 array into RGB (uint8) array by keeping the top 24 bits.
+    Returns an array of shape (*data.shape, 3) with dtype uint8.
+    """
+    # View the 32-bit float bit-pattern as a 32-bit unsigned integer
+    u32 = data.astype(np.float32).view(np.uint32)
+
+    # Extract the top 24 bits by shifting right by 8 bits
+    top24 = u32 >> 8
+
+    # Split top24 into R, G, B channels (8 bits each)
+    r = ((top24 >> 16) & 0xFF).astype(np.uint8)
+    g = ((top24 >> 8) & 0xFF).astype(np.uint8)
+    b = (top24 & 0xFF).astype(np.uint8)
+
+    # Stack along the last axis to get RGB triplets
+    return np.stack([r, g, b], axis=-1)
+
+
+def rgb_to_float32(rgb_arr: np.ndarray) -> np.ndarray:
+    """
+    Decodes RGB (uint8) array back into float32, padding the lowest 8 bits with zeros.
+
+    Expects input shape (*shape, 3) with dtype uint8.
+    """
+    r = rgb_arr[..., 0].astype(np.uint32)
+    g = rgb_arr[..., 1].astype(np.uint32)
+    b = rgb_arr[..., 2].astype(np.uint32)
+
+    # Combine RGB channels back into 24-bit integer
+    top24 = (r << 16) | (g << 8) | b
+
+    # Shift left by 8 to restore the 32-bit layout (filling lost bits with 0s)
+    u32 = top24 << 8
+
+    # Interpret bit-pattern back as float32
+    return u32.view(np.float32)
+
+
+def encode_mesh(mesh_path, faces, vertices, normals, colors, quality):
+    # Define structured array for vertices including 'quality'
+    vertex_dtype = [
+        ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),           # XYZ coordinates
+        ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),        # Normals
+        ('red', 'u1'), ('green', 'u1'), ('blue', 'u1'),  # Colors
+        ('quality', 'f4')                                # Reflectivity
+    ]
+
+    # Extract and populate vertex data
+    vertex_data = np.empty(vertices.shape[0], dtype=vertex_dtype)
+    vertex_data['x'] = vertices[:, 0]
+    vertex_data['y'] = vertices[:, 1]
+    vertex_data['z'] = vertices[:, 2]
+    vertex_data['nx'] = normals[:, 0]
+    vertex_data['ny'] = normals[:, 1]
+    vertex_data['nz'] = normals[:, 2]
+    vertex_data['red'] = colors[:, 0]
+    vertex_data['green'] = colors[:, 1]
+    vertex_data['blue'] = colors[:, 2]
+    vertex_data['quality'] = quality
+
+    ply_vertex = PlyElement.describe(vertex_data, 'vertex')
+    ply_elements = [ply_vertex]
+
+    # Extract and format faces
+    face_dtype = [('vertex_indices', 'i4', (3,))]  # plyfile expects list properties to be formatted with a fixed inner shape like (3,)
+    face_data = np.empty(len(faces), dtype=face_dtype)
+    face_data['vertex_indices'] = faces
+
+    ply_face = PlyElement.describe(face_data, 'face')
+    ply_elements.append(ply_face)
+
+    PlyData(ply_elements, text=False).write(mesh_path)
+
+
 class Decomposition:
     def __init__(self, dataset: Dataset, lower: float, upper: float):
         self.dataset = dataset
@@ -169,39 +245,15 @@ class Decomposition:
         v_reflectivity[valid_mask] /= v_weights[valid_mask]
         np.savez(self.dataset.reflectivity_vertices, data=v_reflectivity)
 
-        # Define structured array for vertices including 'quality'
-        vertex_dtype = [
-            ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),           # XYZ coordinates
-            ('nx', 'f4'), ('ny', 'f4'), ('nz', 'f4'),        # Normals
-            ('red', 'u1'), ('green', 'u1'), ('blue', 'u1'),  # Colors
-            ('quality', 'f4')                                # Reflectivity
-        ]
+        encode_mesh(
+            str(self.dataset.mesh_ply),
+            faces, vertices, normals, colors, v_reflectivity
+        )
 
-        # Extract and populate vertex data
-        vertex_data = np.empty(n, dtype=vertex_dtype)
-        vertex_data['x'] = vertices[:, 0]
-        vertex_data['y'] = vertices[:, 1]
-        vertex_data['z'] = vertices[:, 2]
-        vertex_data['nx'] = normals[:, 0]
-        vertex_data['ny'] = normals[:, 1]
-        vertex_data['nz'] = normals[:, 2]
-        vertex_data['red'] = colors[:, 0]
-        vertex_data['green'] = colors[:, 1]
-        vertex_data['blue'] = colors[:, 2]
-        vertex_data['quality'] = v_reflectivity
-
-        ply_vertex = PlyElement.describe(vertex_data, 'vertex')
-        ply_elements = [ply_vertex]
-
-        # Extract and format faces
-        face_dtype = [('vertex_indices', 'i4', (3,))]  # plyfile expects list properties to be formatted with a fixed inner shape like (3,)
-        face_data = np.empty(len(faces), dtype=face_dtype)
-        face_data['vertex_indices'] = faces
-
-        ply_face = PlyElement.describe(face_data, 'face')
-        ply_elements.append(ply_face)
-
-        PlyData(ply_elements, text=False).write(str(self.dataset.mesh_ply))
+        encode_mesh(
+            str(self.dataset.ref_ply),
+            faces, vertices, normals, float32_to_rgb(v_reflectivity), v_reflectivity
+        )
 
     def generate_texture_maps(self, face_num: int, tex_size: int) -> None:
         ms = pymeshlab.MeshSet()
@@ -222,18 +274,19 @@ class Decomposition:
             border=1
         )
 
+        ms.load_new_mesh(str(self.dataset.ref_ply))
         ms.load_new_mesh(str(self.dataset.mesh_ply))
         ms.set_current_mesh(0)
 
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#transfer_attributes_to_texture_per_vertex
-        for attribute, name in [
-            (2, self.dataset.reflectivity_texture.name)
-            (1, self.dataset.normals_texture.name),
-            (0, self.dataset.colors_texture.name),
+        for attribute, src_mesh, name in [
+            (1, 1, self.dataset.normals_texture.name),
+            (0, 1, self.dataset.reflectivity_texture.name),
+            (0, 2, self.dataset.colors_texture.name),
         ]:
             ms.apply_filter(
                 'transfer_attributes_to_texture_per_vertex',
-                sourcemesh=1,
+                sourcemesh=src_mesh,
                 targetmesh=0,
                 attributeenum=attribute,
                 textname=name,
@@ -243,7 +296,7 @@ class Decomposition:
 
             # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
             ms.save_current_mesh(
-                str(self.dataset.output_mesh),
+                str(self.dataset.output_ply),
                 save_textures=True,
                 save_vertex_normal=True,
             )
