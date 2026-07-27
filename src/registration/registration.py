@@ -77,10 +77,13 @@ class Registration:
     def optimize_extrinsics(self):
         self.load_mesh()
 
-        data = self.calculate_offsets()
+        if not self.dataset.extrinsics_file.exists():
+            data = self.calculate_offsets()
+        else:
+            data = np.load(self.dataset.extrinsics_file)["data"]
 
         indices = data[:, 0]
-        for ts in tqdm(list(self.sss_poses.keys()), desc="Optimizing Extrinsics"):
+        for ts in self.sss_poses.keys():
             sss = self.dataset.sonar[ts]
 
             window = (indices > sss.ping_idx - self.w_size) & (indices < sss.ping_idx + self.w_size)
@@ -279,10 +282,17 @@ class Registration:
 
         data = []
         with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
-            executor.map(
-                lambda ts: data.extend(self._calculate_offsets(ts)),
-                sonars_ts
-            )
+            list(tqdm(
+                executor.map(
+                    lambda ts: data.extend(self._calculate_offsets(ts)),
+                    sonars_ts
+                ),
+                total=len(sonars_ts),
+                desc="Calculating offsets per ping"
+            ))
+
+        data = np.array(data)
+        np.savez_compressed(self.dataset.extrinsics_file, data=data)
 
         return np.array(data)
 
