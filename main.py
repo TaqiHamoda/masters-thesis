@@ -148,13 +148,8 @@ if __name__ == "__main__":
         decomposition.save_reflectivity_mesh(
             slant_sigma=decomposition_cfg['slant_sigma'],
             angle_sigma=decomposition_cfg['angle_sigma'],
-            angle_center=decomposition_cfg['angle_center']
-        )
-
-        print("Generating textures for colors, normals, and reflectivity...")
-        decomposition.generate_texture_maps(
+            angle_center=decomposition_cfg['angle_center'],
             face_num=decomposition_cfg['face_count'],
-            tex_size=decomposition_cfg['texture_size']
         )
 
     if synthesize_cfg['enabled']:

@@ -1,8 +1,10 @@
 import cv2
 import numpy as np
 import open3d as o3d
+from scipy.interpolate import griddata
 
 import pymeshlab
+import imageio.v3 as iio
 from plyfile import PlyData, PlyElement
 
 from typing import Tuple
@@ -11,47 +13,42 @@ from tqdm import tqdm
 from .dataset import Dataset, VertexHit
 
 
-def float32_to_rgb(data: np.ndarray) -> np.ndarray:
+def rasterize_texture(
+    uv_matrix: np.ndarray,          # (N, 2) normalized UVs per vertex
+    faces: np.ndarray,              # (F, 3) triangle indices
+    vertex_data: np.ndarray,        # (N,) float32 values
+    tex_size: int
+) -> np.ndarray:
     """
-    Encodes float32 array into RGB (uint8) array by keeping the top 24 bits.
-    Returns an array of shape (*data.shape, 3) with dtype uint8.
+    Interpolates continuous vertex float values onto a 2D UV grid buffer (Rasterization).
     """
-    # View the 32-bit float bit-pattern as a 32-bit unsigned integer
-    u32 = data.astype(np.float32).view(np.uint32)
 
-    # Extract the top 24 bits by shifting right by 8 bits
-    top24 = u32 >> 8
+    # Convert wedge UVs to per-vertex UVs
+    uvs = np.zeros((vertex_data.shape[0], 2), dtype=np.float32)
+    flat_faces = faces.flatten()
+    uvs[flat_faces] = uv_matrix
 
-    # Split top24 into R, G, B channels (8 bits each)
-    r = ((top24 >> 16) & 0xFF).astype(np.uint8)
-    g = ((top24 >> 8) & 0xFF).astype(np.uint8)
-    b = (top24 & 0xFF).astype(np.uint8)
+    # Create 2D pixel grid [0, 1]
+    grid_x, grid_y = np.meshgrid(
+        np.linspace(0, 1, tex_size),
+        np.linspace(0, 1, tex_size)
+    )
 
-    # Stack along the last axis to get RGB triplets
-    return np.stack([r, g, b], axis=-1)
+    # Image Y-axis origin is top-left, so we flip V coordinate (1.0 - V)
+    grid_y_flipped = 1.0 - grid_y
 
-
-def rgb_to_float32(rgb_arr: np.ndarray) -> np.ndarray:
-    """
-    Decodes RGB (uint8) array back into float32, padding the lowest 8 bits with zeros.
-
-    Expects input shape (*shape, 3) with dtype uint8.
-    """
-    r = rgb_arr[..., 0].astype(np.uint32)
-    g = rgb_arr[..., 1].astype(np.uint32)
-    b = rgb_arr[..., 2].astype(np.uint32)
-
-    # Combine RGB channels back into 24-bit integer
-    top24 = (r << 16) | (g << 8) | b
-
-    # Shift left by 8 to restore the 32-bit layout (filling lost bits with 0s)
-    u32 = top24 << 8
-
-    # Interpret bit-pattern back as float32
-    return u32.view(np.float32)
+    # Single channel scalar field (e.g., Reflectivity)
+    texture = griddata(
+        uvs,
+        vertex_data,
+        (grid_x, grid_y_flipped),
+        method='linear',
+        fill_value=0.0
+    )
+    return texture.astype(np.float32)
 
 
-def encode_mesh(mesh_path, faces, vertices, normals, colors, quality):
+def encode_mesh(mesh_path, faces, vertices, normals, colors, uvs, quality):
     # Define structured array for vertices including 'quality'
     vertex_dtype = [
         ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),           # XYZ coordinates
@@ -76,10 +73,18 @@ def encode_mesh(mesh_path, faces, vertices, normals, colors, quality):
     ply_vertex = PlyElement.describe(vertex_data, 'vertex')
     ply_elements = [ply_vertex]
 
+    # Open3D's triangle_uvs shape is (N_faces * 3, 2).
+    # We reshape it to (N_faces, 6) so each face holds [u0, v0, u1, v1, u2, v2].
+    formatted_uvs = uvs.reshape(-1, 6)
+
     # Extract and format faces
-    face_dtype = [('vertex_indices', 'i4', (3,))]  # plyfile expects list properties to be formatted with a fixed inner shape like (3,)
+    face_dtype = [
+        ('vertex_indices', 'i4', (3,)),
+        ('texcoord', 'f4', (6,))
+    ]
     face_data = np.empty(len(faces), dtype=face_dtype)
     face_data['vertex_indices'] = faces
+    face_data['texcoord'] = formatted_uvs
 
     ply_face = PlyElement.describe(face_data, 'face')
     ply_elements.append(ply_face)
@@ -202,7 +207,8 @@ class Decomposition:
     def save_reflectivity_mesh(self,
         slant_sigma: float,
         angle_sigma: float,
-        angle_center: float
+        angle_center: float,
+        face_num: int,
     ):
         # Use Guassian Decay for the weighting function
         w_func = lambda x, sigma: np.exp(-np.power(x, 2) / (2 * np.power(sigma, 2)))
@@ -213,6 +219,7 @@ class Decomposition:
         normals = np.asarray(mesh.vertex_normals)
         colors = np.clip(255 * np.asarray(mesh.vertex_colors), 0, 255).astype(np.uint8)
         faces = np.asarray(mesh.triangles)
+        uvs = np.asarray(mesh.triangle_uvs)
 
         n = vertices.shape[0]
         v_weights = np.zeros((n,), dtype=np.float32)
@@ -247,56 +254,29 @@ class Decomposition:
 
         encode_mesh(
             str(self.dataset.mesh_ply),
-            faces, vertices, normals, colors, v_reflectivity
+            faces, vertices, normals, colors, uvs, v_reflectivity
         )
 
-        encode_mesh(
-            str(self.dataset.ref_ply),
-            faces, vertices, normals, float32_to_rgb(v_reflectivity), v_reflectivity
+        tex_size = cv2.imread(str(self.dataset.colors_texture)).shape[0]
+        iio.imwrite(str(self.dataset.reflectivity_texture),
+            rasterize_texture(
+                uvs, faces, v_reflectivity, tex_size=tex_size
+            )
         )
 
-    def generate_texture_maps(self, face_num: int, tex_size: int) -> None:
         ms = pymeshlab.MeshSet()
         ms.load_new_mesh(str(self.dataset.mesh_ply))
 
-        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#meshing_decimation_quadric_edge_collapse
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#meshing_decimation_quadric_edge_collapse_with_texture
         ms.apply_filter(
-            'meshing_decimation_quadric_edge_collapse',
+            'meshing_decimation_quadric_edge_collapse_with_texture',
             targetfacenum=face_num,
             preservenormal=True,
             preservetopology=True
         )
 
-        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texcoord_parametrization_triangle_trivial_per_wedge
-        ms.apply_filter(
-            'compute_texcoord_parametrization_triangle_trivial_per_wedge',
-            textdim=tex_size,
-            border=1
+        ms.save_current_mesh(
+            str(self.dataset.output_ply),
+            save_textures=True,
+            save_vertex_normal=True,
         )
-
-        ms.load_new_mesh(str(self.dataset.ref_ply))
-        ms.load_new_mesh(str(self.dataset.mesh_ply))
-        ms.set_current_mesh(0)
-
-        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#transfer_attributes_to_texture_per_vertex
-        for attribute, src_mesh, name in [
-            (1, 1, self.dataset.normals_texture.name),
-            (0, 1, self.dataset.reflectivity_texture.name),
-            (0, 2, self.dataset.colors_texture.name),
-        ]:
-            ms.apply_filter(
-                'transfer_attributes_to_texture_per_vertex',
-                sourcemesh=src_mesh,
-                targetmesh=0,
-                attributeenum=attribute,
-                textname=name,
-                textw=tex_size,
-                texth=tex_size
-            )
-
-            # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
-            ms.save_current_mesh(
-                str(self.dataset.output_ply),
-                save_textures=True,
-                save_vertex_normal=True,
-            )
