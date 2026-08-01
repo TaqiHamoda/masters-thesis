@@ -148,13 +148,19 @@ if __name__ == "__main__":
             print("Saving reflectivity image...")
             decomposition.save_reflectivity_image()
 
-        if not dataset.reflectivity_vertices.exists() or not dataset.reflectivity_texture.exists() or not dataset.output_ply.exists():
+        if not dataset.reflectivity_vertices.exists():
             print("Saving reflectivity mesh...")
             decomposition.save_reflectivity_mesh(
                 slant_sigma=decomposition_cfg['slant_sigma'],
                 angle_sigma=decomposition_cfg['angle_sigma'],
-                angle_center=decomposition_cfg['angle_center'],
-                face_num=decomposition_cfg['face_count'],
+                angle_center=decomposition_cfg['angle_center']
+            )
+
+        if not dataset.reflectivity_texture.exists() or not dataset.output_ply.exists():
+            print("Saving reflectivity texture...")
+            decomposition.export_textures(
+                tex_size=decomposition_cfg['texture_size'],
+                face_num=decomposition_cfg['face_count']
             )
 
     if synthesize_cfg['enabled']:

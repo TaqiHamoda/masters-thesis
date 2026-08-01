@@ -144,7 +144,7 @@ class Photogrammetry:
 
         pycolmap.stereo_fusion(self.fused_ply, self.workspace_path, options=fusion_options, output_type="ply")
 
-    def create_mesh(self, mesh_depth: int = 8, texture_size: int = 1024):
+    def create_mesh(self, mesh_depth: int = 8):
         if not self.fused_ply.exists():
             raise ValueError("Dense reconstruction outputs not found. Please run dense reconstruction before meshing.")
 
@@ -164,44 +164,11 @@ class Photogrammetry:
             weightmode="By Angle"
         )
 
-        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texcoord_parametrization_triangle_trivial_per_wedge
-        ms.apply_filter(
-            'compute_texcoord_parametrization_triangle_trivial_per_wedge',
-            textdim=texture_size,
-            border=1
-        )
-
         # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
         ms.save_current_mesh(
             str(self.dataset.mesh_ply),
             save_vertex_normal=True,
         )
-
-        # Load the newly generated mesh which has faces
-        ms = pymeshlab.MeshSet()
-        ms.load_new_mesh(str(self.dataset.mesh_ply))
-
-        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#transfer_attributes_to_texture_per_vertex
-        for attribute, name in [
-            (1, self.dataset.normals_texture.name),
-            (0, self.dataset.colors_texture.name),
-        ]:
-            ms.apply_filter(
-                'transfer_attributes_to_texture_per_vertex',
-                sourcemesh=0,
-                targetmesh=0,
-                attributeenum=attribute,
-                textname=name,
-                textw=texture_size,
-                texth=texture_size
-            )
-
-            # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
-            ms.save_current_mesh(
-                str(self.dataset.mesh_ply),
-                save_textures=True,
-                save_vertex_normal=True,
-            )
 
     @staticmethod
     def has_cuda() -> bool:

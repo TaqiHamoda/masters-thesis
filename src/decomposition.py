@@ -76,13 +76,18 @@ def encode_mesh(mesh_path, faces, vertices, normals, colors, uvs, quality):
     formatted_uvs = uvs.reshape(-1, 6)
 
     # Extract and format faces
-    face_dtype = [
-        ('vertex_indices', 'i4', (3,)),
-        ('texcoord', 'f4', (6,))
-    ]
-    face_data = np.empty(len(faces), dtype=face_dtype)
-    face_data['vertex_indices'] = faces
-    face_data['texcoord'] = formatted_uvs
+    if uvs is not None:
+        face_dtype = [
+            ('vertex_indices', 'i4', (3,)),
+            ('texcoord', 'f4', (6,))
+        ]
+        face_data = np.empty(len(faces), dtype=face_dtype)
+        face_data['vertex_indices'] = faces
+        face_data['texcoord'] = formatted_uvs
+    else:
+        face_dtype = [('vertex_indices', 'i4', (3,))]
+        face_data = np.empty(len(faces), dtype=face_dtype)
+        face_data['vertex_indices'] = faces
 
     ply_face = PlyElement.describe(face_data, 'face')
     ply_elements.append(ply_face)
@@ -101,9 +106,7 @@ def decode_mesh(mesh_path):
     colors = np.vstack([vertex_data['red'], vertex_data['green'], vertex_data['blue']]).T.astype(np.uint8)
     faces = np.vstack(face_data['vertex_indices'])
 
-    # 6. Extract UV Coordinates (Per-Vertex or Per-Wedge)
-    uvs = np.empty((0, 2))
-
+    uvs = None
     if 'u' in vertex_data.dtype.names and 'v' in vertex_data.dtype.names:
         vertex_uvs = np.vstack([vertex_data['u'], vertex_data['v']]).T
         # Map per-vertex UVs to Open3D's per-triangle-corner layout
@@ -116,9 +119,7 @@ def decode_mesh(mesh_path):
         uvs = np.vstack(face_data['texcoord']).reshape(-1, 2)
     elif 'texture_coords' in face_data.dtype.names:
         uvs = np.vstack(face_data['texture_coords']).reshape(-1, 2)
-    else:
-        raise ValueError("UV coordinates not found in the mesh file.")
-
+    
     return vertices, normals, colors, faces, uvs
 
 
@@ -238,12 +239,10 @@ class Decomposition:
         slant_sigma: float,
         angle_sigma: float,
         angle_center: float,
-        face_num: int,
     ):
         # Use Guassian Decay for the weighting function
         w_func = lambda x, sigma: np.exp(-np.power(x, 2) / (2 * np.power(sigma, 2)))
 
-        # Docs: https://www.open3d.org/docs/release/python_api/open3d.geometry.TriangleMesh.html
         vertices, normals, colors, faces, uvs = decode_mesh(self.dataset.mesh_ply)
 
         n = vertices.shape[0]
@@ -282,26 +281,53 @@ class Decomposition:
             faces, vertices, normals, colors, uvs, v_reflectivity
         )
 
-        tex_size = cv2.imread(str(self.dataset.colors_texture)).shape[0]
-        iio.imwrite(str(self.dataset.reflectivity_texture),
-            rasterize_texture(
-                uvs, faces, v_reflectivity, tex_size=tex_size
-            )
-        )
-
+    def export_textures(self, tex_size: int, face_num: int):
+        # Load the newly generated mesh which has faces
         ms = pymeshlab.MeshSet()
         ms.load_new_mesh(str(self.dataset.mesh_ply))
 
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#meshing_decimation_quadric_edge_collapse_with_texture
         ms.apply_filter(
-            'meshing_decimation_quadric_edge_collapse_with_texture',
+            'meshing_decimation_quadric_edge_collapse',
             targetfacenum=face_num,
             preservenormal=True,
             preservetopology=True
         )
 
-        ms.save_current_mesh(
-            str(self.dataset.output_ply),
-            save_textures=True,
-            save_vertex_normal=True,
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#compute_texcoord_parametrization_triangle_trivial_per_wedge
+        ms.apply_filter(
+            'compute_texcoord_parametrization_triangle_trivial_per_wedge',
+            textdim=tex_size,
+            border=1
+        )
+
+        # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#transfer_attributes_to_texture_per_vertex
+        for attribute, name in [
+            (1, self.dataset.normals_texture.name),
+            (0, self.dataset.colors_texture.name),
+        ]:
+            ms.apply_filter(
+                'transfer_attributes_to_texture_per_vertex',
+                sourcemesh=0,
+                targetmesh=0,
+                attributeenum=attribute,
+                textname=name,
+                textw=tex_size,
+                texth=tex_size
+            )
+
+            # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
+            ms.save_current_mesh(
+                str(self.dataset.output_ply),
+                save_textures=True,
+                save_vertex_normal=True,
+            )
+
+        v_reflectivity = np.load(self.dataset.reflectivity_vertices)["data"]
+        vertices, normals, colors, faces, uvs = decode_mesh(self.dataset.output_ply)
+
+        iio.imwrite(str(self.dataset.reflectivity_texture),
+            rasterize_texture(
+                uvs, faces, v_reflectivity, tex_size=tex_size
+            )
         )
