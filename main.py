@@ -139,18 +139,23 @@ if __name__ == "__main__":
             upper=decomposition_cfg['upper_percentile']
         )
 
-        print("Performing component decomposition...")
-        decomposition.process_decomposition()
-        decomposition.print_stats()
+        if not dataset.sonar_angles.exists() or not dataset.sonar_loss.exists() or not dataset.sonar_reflectivity.exists():
+            print("Performing component decomposition...")
+            decomposition.process_decomposition()
+            decomposition.print_stats()
 
-        print("Saving reflectivity image and mesh...")
-        decomposition.save_reflectivity_image()
-        decomposition.save_reflectivity_mesh(
-            slant_sigma=decomposition_cfg['slant_sigma'],
-            angle_sigma=decomposition_cfg['angle_sigma'],
-            angle_center=decomposition_cfg['angle_center'],
-            face_num=decomposition_cfg['face_count'],
-        )
+        if not dataset.reflectivity_png.exists() or not dataset.overlay_png.exists():
+            print("Saving reflectivity image...")
+            decomposition.save_reflectivity_image()
+
+        if not dataset.reflectivity_vertices.exists() or not dataset.reflectivity_texture.exists() or not dataset.output_ply.exists():
+            print("Saving reflectivity mesh...")
+            decomposition.save_reflectivity_mesh(
+                slant_sigma=decomposition_cfg['slant_sigma'],
+                angle_sigma=decomposition_cfg['angle_sigma'],
+                angle_center=decomposition_cfg['angle_center'],
+                face_num=decomposition_cfg['face_count'],
+            )
 
     if synthesize_cfg['enabled']:
         Registration(

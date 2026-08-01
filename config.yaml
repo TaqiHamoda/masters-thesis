@@ -50,7 +50,7 @@ photogrammetry:
 
   mesh:
     mesh_depth: 12                    # Depth parameter for Poisson surface resolution (Default: 8)
-    texture_size: 8192                  # Texture size for UV mapping for colors, normals, and reflectivity (Default: 1024)
+    texture_size: 32768               # Texture size for UV mapping for colors, normals, and reflectivity (Default: 1024)
 
 registration:
   enabled: false                      # Perform cross-modal registration between sonar hits and optical images

@@ -177,6 +177,10 @@ class Photogrammetry:
             save_vertex_normal=True,
         )
 
+        # Load the newly generated mesh which has faces
+        ms = pymeshlab.MeshSet()
+        ms.load_new_mesh(str(self.dataset.mesh_ply))
+
         # https://pymeshlab.readthedocs.io/en/latest/filter_list.html#transfer_attributes_to_texture_per_vertex
         for attribute, name in [
             (1, self.dataset.normals_texture.name),
@@ -194,7 +198,7 @@ class Photogrammetry:
 
             # https://pymeshlab.readthedocs.io/en/latest/io_format_list.html#save-mesh-parameters
             ms.save_current_mesh(
-                str(self.dataset.output_ply),
+                str(self.dataset.mesh_ply),
                 save_textures=True,
                 save_vertex_normal=True,
             )

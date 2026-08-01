@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-import open3d as o3d
 from scipy.interpolate import griddata
 
 import pymeshlab
@@ -14,7 +13,7 @@ from .dataset import Dataset, VertexHit
 
 
 def rasterize_texture(
-    uv_matrix: np.ndarray,          # (N, 2) normalized UVs per vertex
+    uvs: np.ndarray,                # (N, 2) normalized UVs per vertex
     faces: np.ndarray,              # (F, 3) triangle indices
     vertex_data: np.ndarray,        # (N,) float32 values
     tex_size: int
@@ -23,10 +22,9 @@ def rasterize_texture(
     Interpolates continuous vertex float values onto a 2D UV grid buffer (Rasterization).
     """
 
-    # Convert wedge UVs to per-vertex UVs
-    uvs = np.zeros((vertex_data.shape[0], 2), dtype=np.float32)
+    # Expand vertex values to match the wedge UVs length (F*3)
     flat_faces = faces.flatten()
-    uvs[flat_faces] = uv_matrix
+    wedge_values = vertex_data[flat_faces]
 
     # Create 2D pixel grid [0, 1]
     grid_x, grid_y = np.meshgrid(
@@ -39,8 +37,8 @@ def rasterize_texture(
 
     # Single channel scalar field (e.g., Reflectivity)
     texture = griddata(
-        uvs,
-        vertex_data,
+        uvs,                  # Shape: (F*3, 2)
+        wedge_values,               # Shape: (F*3,)
         (grid_x, grid_y_flipped),
         method='linear',
         fill_value=0.0
@@ -90,6 +88,38 @@ def encode_mesh(mesh_path, faces, vertices, normals, colors, uvs, quality):
     ply_elements.append(ply_face)
 
     PlyData(ply_elements, text=False).write(mesh_path)
+
+
+def decode_mesh(mesh_path):
+    ply_data = PlyData.read(str(mesh_path))
+    vertex_data = ply_data['vertex'].data
+    face_data = ply_data['face'].data
+
+    # Extract data
+    vertices = np.vstack([vertex_data['x'], vertex_data['y'], vertex_data['z']]).T
+    normals = np.vstack([vertex_data['nx'], vertex_data['ny'], vertex_data['nz']]).T
+    colors = np.vstack([vertex_data['red'], vertex_data['green'], vertex_data['blue']]).T.astype(np.uint8)
+    faces = np.vstack(face_data['vertex_indices'])
+
+    # 6. Extract UV Coordinates (Per-Vertex or Per-Wedge)
+    uvs = np.empty((0, 2))
+
+    if 'u' in vertex_data.dtype.names and 'v' in vertex_data.dtype.names:
+        vertex_uvs = np.vstack([vertex_data['u'], vertex_data['v']]).T
+        # Map per-vertex UVs to Open3D's per-triangle-corner layout
+        uvs = vertex_uvs[faces.reshape(-1)]
+    elif 's' in vertex_data.dtype.names and 't' in vertex_data.dtype.names:
+        vertex_uvs = np.vstack([vertex_data['s'], vertex_data['t']]).T
+        uvs = vertex_uvs[faces.reshape(-1)]
+    elif 'texcoord' in face_data.dtype.names:
+        # Reshape array of shape (num_faces, 6) -> (num_faces * 3, 2)
+        uvs = np.vstack(face_data['texcoord']).reshape(-1, 2)
+    elif 'texture_coords' in face_data.dtype.names:
+        uvs = np.vstack(face_data['texture_coords']).reshape(-1, 2)
+    else:
+        raise ValueError("UV coordinates not found in the mesh file.")
+
+    return vertices, normals, colors, faces, uvs
 
 
 class Decomposition:
@@ -214,12 +244,7 @@ class Decomposition:
         w_func = lambda x, sigma: np.exp(-np.power(x, 2) / (2 * np.power(sigma, 2)))
 
         # Docs: https://www.open3d.org/docs/release/python_api/open3d.geometry.TriangleMesh.html
-        mesh = o3d.io.read_triangle_mesh(str(self.dataset.mesh_ply))
-        vertices = np.asarray(mesh.vertices)
-        normals = np.asarray(mesh.vertex_normals)
-        colors = np.clip(255 * np.asarray(mesh.vertex_colors), 0, 255).astype(np.uint8)
-        faces = np.asarray(mesh.triangles)
-        uvs = np.asarray(mesh.triangle_uvs)
+        vertices, normals, colors, faces, uvs = decode_mesh(self.dataset.mesh_ply)
 
         n = vertices.shape[0]
         v_weights = np.zeros((n,), dtype=np.float32)
