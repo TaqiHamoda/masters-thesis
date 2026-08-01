@@ -3,6 +3,7 @@ import numpy as np
 from scipy.interpolate import griddata
 
 import pymeshlab
+import open3d as o3d
 import imageio.v3 as iio
 from plyfile import PlyData, PlyElement
 
@@ -46,7 +47,7 @@ def rasterize_texture(
     return texture.astype(np.float32)
 
 
-def encode_mesh(mesh_path, faces, vertices, normals, colors, uvs, quality):
+def encode_mesh(mesh_path, faces, vertices, normals, colors, quality, uvs=None):
     # Define structured array for vertices including 'quality'
     vertex_dtype = [
         ('x', 'f4'), ('y', 'f4'), ('z', 'f4'),           # XYZ coordinates
@@ -71,10 +72,6 @@ def encode_mesh(mesh_path, faces, vertices, normals, colors, uvs, quality):
     ply_vertex = PlyElement.describe(vertex_data, 'vertex')
     ply_elements = [ply_vertex]
 
-    # Open3D's triangle_uvs shape is (N_faces * 3, 2).
-    # We reshape it to (N_faces, 6) so each face holds [u0, v0, u1, v1, u2, v2].
-    formatted_uvs = uvs.reshape(-1, 6)
-
     # Extract and format faces
     if uvs is not None:
         face_dtype = [
@@ -83,7 +80,10 @@ def encode_mesh(mesh_path, faces, vertices, normals, colors, uvs, quality):
         ]
         face_data = np.empty(len(faces), dtype=face_dtype)
         face_data['vertex_indices'] = faces
-        face_data['texcoord'] = formatted_uvs
+
+        # Open3D's triangle_uvs shape is (N_faces * 3, 2).
+        # We reshape it to (N_faces, 6) so each face holds [u0, v0, u1, v1, u2, v2].
+        face_data['texcoord'] = uvs.reshape(-1, 6)
     else:
         face_dtype = [('vertex_indices', 'i4', (3,))]
         face_data = np.empty(len(faces), dtype=face_dtype)
@@ -105,6 +105,7 @@ def decode_mesh(mesh_path):
     normals = np.vstack([vertex_data['nx'], vertex_data['ny'], vertex_data['nz']]).T
     colors = np.vstack([vertex_data['red'], vertex_data['green'], vertex_data['blue']]).T.astype(np.uint8)
     faces = np.vstack(face_data['vertex_indices'])
+    quality = np.vstack(vertex_data['quality']) if 'quality' in vertex_data.dtype.names else None
 
     uvs = None
     if 'u' in vertex_data.dtype.names and 'v' in vertex_data.dtype.names:
@@ -120,7 +121,7 @@ def decode_mesh(mesh_path):
     elif 'texture_coords' in face_data.dtype.names:
         uvs = np.vstack(face_data['texture_coords']).reshape(-1, 2)
     
-    return vertices, normals, colors, faces, uvs
+    return vertices, normals, colors, faces, quality, uvs
 
 
 class Decomposition:
@@ -243,7 +244,12 @@ class Decomposition:
         # Use Guassian Decay for the weighting function
         w_func = lambda x, sigma: np.exp(-np.power(x, 2) / (2 * np.power(sigma, 2)))
 
-        vertices, normals, colors, faces, uvs = decode_mesh(self.dataset.mesh_ply)
+        # Docs: https://www.open3d.org/docs/release/python_api/open3d.geometry.TriangleMesh.html
+        mesh = o3d.io.read_triangle_mesh(str(self.dataset.mesh_ply))
+        vertices = np.asarray(mesh.vertices)
+        normals = np.asarray(mesh.vertex_normals)
+        colors = np.clip(255 * np.asarray(mesh.vertex_colors), 0, 255).astype(np.uint8)
+        faces = np.asarray(mesh.triangles)
 
         n = vertices.shape[0]
         v_weights = np.zeros((n,), dtype=np.float32)
@@ -278,7 +284,7 @@ class Decomposition:
 
         encode_mesh(
             str(self.dataset.mesh_ply),
-            faces, vertices, normals, colors, uvs, v_reflectivity
+            faces, vertices, normals, colors, v_reflectivity
         )
 
     def export_textures(self, tex_size: int, face_num: int):
@@ -323,11 +329,10 @@ class Decomposition:
                 save_vertex_normal=True,
             )
 
-        v_reflectivity = np.load(self.dataset.reflectivity_vertices)["data"]
-        vertices, normals, colors, faces, uvs = decode_mesh(self.dataset.output_ply)
+        vertices, normals, colors, faces, quality, uvs = decode_mesh(self.dataset.output_ply)
 
         iio.imwrite(str(self.dataset.reflectivity_texture),
             rasterize_texture(
-                uvs, faces, v_reflectivity, tex_size=tex_size
+                uvs, faces, quality, tex_size=tex_size
             )
         )
