@@ -331,8 +331,11 @@ class Decomposition:
 
         vertices, normals, colors, faces, quality, uvs = decode_mesh(self.dataset.output_ply)
 
+        # Source: https://imageio.readthedocs.io/en/v2.10.5/reference/_backends/imageio.plugins.freeimage.html#module-imageio.plugins.freeimage
+        # Source: https://cfis.github.io/free-image-ruby/classes/FreeImage/AbstractSource/Encoder.html#:~:text=Constants.%20BMP_DEFAULT.%20%3D%200x0.%20BMP_SAVE_RLE.%20%3D%200x1.,Save%20with%20no%20compression.%20EXR_PIZ.%20%3D%200x0008.
         iio.imwrite(str(self.dataset.reflectivity_texture),
             rasterize_texture(
                 uvs, faces, quality, tex_size=tex_size
-            )
+            ).astype(np.float32),
+            flags=1
         )
