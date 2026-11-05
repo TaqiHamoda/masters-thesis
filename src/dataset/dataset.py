@@ -55,7 +55,8 @@ class Dataset:
         self.overlay_png = self.sonar_dir / "overlay.png"
         self.extrinsics_file = self.sonar_dir / "extrinsics.npz"
 
-        self.synthetic_traj = self.output_path / "synthetic.npz"
+        self.synthetic_pos = self.output_path / "synthetic_pos.npz"
+        self.synthetic_raw = self.output_path / "synthetic.npz"
         self.synthetic_img = self.output_path / "synthetic.png"
 
         self.mesh_dir = self.output_path / "mesh"

@@ -360,18 +360,20 @@ class Registration:
         prop_loss = np.load(self.dataset.sonar_loss)["data"]
         reflectivity = np.load(self.dataset.reflectivity_vertices)["data"]
 
-        waterfall = 0 * np.load(self.dataset.sonar_reflectivity)["data"]
+        waterfall = np.zeros_like(np.load(self.dataset.sonar_reflectivity)["data"], dtype=np.float32)
+        positions = np.zeros((waterfall.shape[0], waterfall.shape[1], 3), dtype=np.float32)
         counts = np.zeros_like(waterfall)
 
         def populate_waterfall(data):
-            nonlocal waterfall, counts
+            nonlocal waterfall, positions, counts
 
             for ping_idx, bin_idx, v_idx, theta in data:
                 if ping_idx >= waterfall.shape[0] or bin_idx >= waterfall.shape[1]:
                     continue
 
                 counts[ping_idx, bin_idx] += 1
-                waterfall[ping_idx, bin_idx] = reflectivity[v_idx] * np.abs(np.cos(theta)) * prop_loss[bin_idx]
+                waterfall[ping_idx, bin_idx] += reflectivity[v_idx] * np.abs(np.cos(theta)) * prop_loss[bin_idx]
+                positions[ping_idx, bin_idx] += self.vertices[v_idx]
 
         with ThreadPoolExecutor(max_workers=self.num_threads) as executor:
             list(tqdm(
@@ -385,16 +387,21 @@ class Registration:
 
         is_valid = counts > 0
         waterfall[is_valid] /= counts[is_valid]
+        positions[is_valid] /= counts[is_valid].reshape(-1, 1)
 
-        np.savez_compressed(self.dataset.synthetic_traj, data=waterfall)
-
-        waterfall = np.log1p(waterfall)
-        waterfall -= np.min(waterfall[is_valid])
-        waterfall /= np.max(waterfall)
-        waterfall = (255 * waterfall).astype(np.uint8)
-        waterfall = cv2.flip(waterfall, 0)
+        image = np.log1p(waterfall)
+        image -= np.min(image[is_valid])
+        image /= np.max(image)
+        image = (255 * image).astype(np.uint8)
+        image = cv2.flip(image, 0)
 
         cv2.imwrite(
             str(self.dataset.synthetic_img),
-            waterfall
+            image
         )
+
+        waterfall[~is_valid] = np.nan
+        positions[~is_valid] = (np.nan, np.nan, np.nan)
+
+        np.savez_compressed(self.dataset.synthetic_raw, data=waterfall)
+        np.savez_compressed(self.dataset.synthetic_pos, data=positions)

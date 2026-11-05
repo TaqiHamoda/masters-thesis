@@ -62,7 +62,7 @@ registration:
                                       # Default assumes YZ plane fan (standard for Side-Scan Sonar)
 
 decomposition:                        # Colormap used for reflectivity image is OpenCV's RAINBOW.
-  enabled: false                      # Perform reflectivity decomposition of the sonar data (dependent on vertex registration)
+  enabled: true                      # Perform reflectivity decomposition of the sonar data (dependent on vertex registration)
   lower_percentile: 1                 # Lower percentile for reflectivity clipping in reflectivity image (Default: 1)
   upper_percentile: 99                # Upper percentile for reflectivity clipping in reflectivity image (Default: 99)
   slant_sigma: 10                     # Standard deviation for slant distance weights calculated using Guassian Decay (Default: 10)
@@ -72,7 +72,7 @@ decomposition:                        # Colormap used for reflectivity image is 
   face_count: 7000000                 # Maximum number of faces to keep when simplifying the mesh (Default: 7000000)
 
 synthesize:
-  enabled: false                      # Synthesize SSS imagery using the existing vehicle trajectory
+  enabled: true                      # Synthesize SSS imagery using the existing vehicle trajectory
   translation: [0.0, 0.0, 0.0]        # Global translation applied to the trajectory before processing
 
 visualizations:
