@@ -65,6 +65,7 @@ if __name__ == "__main__":
     sonar_cfg = cfg['sonar']
     registration_cfg = cfg['registration']
     decomposition_cfg = cfg['decomposition']
+    ba_cfg = cfg['bundle_adjustment']
     synthesize_cfg = cfg['synthesize']
     visual_cfg = cfg['visualizations']
 
@@ -136,7 +137,8 @@ if __name__ == "__main__":
         decomposition = Decomposition(
             dataset,
             lower=decomposition_cfg['lower_percentile'],
-            upper=decomposition_cfg['upper_percentile']
+            upper=decomposition_cfg['upper_percentile'],
+            ba_cfg=ba_cfg
         )
 
         if not dataset.sonar_angles.exists() or not dataset.sonar_loss.exists() or not dataset.sonar_reflectivity.exists():

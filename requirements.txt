@@ -11,3 +11,4 @@ pyxtf
 open3d
 plyfile
 viser
+pyceres

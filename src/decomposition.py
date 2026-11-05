@@ -125,10 +125,11 @@ def decode_mesh(mesh_path):
 
 
 class Decomposition:
-    def __init__(self, dataset: Dataset, lower: float, upper: float):
+    def __init__(self, dataset: Dataset, lower: float, upper: float, ba_cfg: dict = None):
         self.dataset = dataset
         self.lower = lower
         self.upper = upper
+        self.ba_cfg = ba_cfg if ba_cfg is not None else {}
 
         self.waterfall = np.load(dataset.sonar_file)["data"]
         self.vertex_hits = sorted(self.dataset.vertex_matches_dir.glob("*.csv"))
@@ -172,11 +173,70 @@ class Decomposition:
         return angles, prop_loss, reflectivity
 
     def process_decomposition(self) -> None:
-        angles, prop_loss, reflectivity = self.get_decomposition()
+        if self.ba_cfg.get("enabled", False):
+            self.process_decomposition_ba()
+        else:
+            angles, prop_loss, reflectivity = self.get_decomposition()
+
+            np.savez_compressed(self.dataset.sonar_angles, data=angles)
+            np.savez_compressed(self.dataset.sonar_loss, data=prop_loss)
+            np.savez_compressed(self.dataset.sonar_reflectivity, data=reflectivity)
+
+    def process_decomposition_ba(self) -> None:
+        """Replaces the closed-form decomposition with a bundle adjustment solve."""
+        from .bundle_adjustment import BundleAdjustment
+
+        cfg = self.ba_cfg
+        ba = BundleAdjustment(
+            self.dataset,
+            ang_samples=cfg.get("ang_samples", 360),
+            max_angle=cfg.get("max_angle", np.pi / 2),
+            absorption_coeff=cfg.get("absorption_coeff", 0.1),
+            max_iterations=cfg.get("max_iterations", 100),
+            loss_delta=cfg.get("loss_delta", 1000.0),
+            gauge_weight=cfg.get("gauge_weight", 1.0),
+            num_threads=cfg.get("num_threads", 6),
+            verbose=cfg.get("verbose", True),
+        )
+
+        reflectivity, beam_port, beam_stbd, absorption_coeff, summary = ba.solve()
+
+        np.savez_compressed(
+            self.dataset.sonar_ba,
+            reflectivity_vertices=reflectivity,
+            beam_port=beam_port,
+            beam_stbd=beam_stbd,
+            absorption_coeff=absorption_coeff,
+        )
+
+        # Incidence angles from the vertex hits (invalid cells stay NaN)
+        angles, is_valid = self.get_incidence_angle_map()
+
+        rows, cols = self.waterfall.shape
+
+        # Average the per-vertex reflectivity over each (ping, bin) cell
+        sums = np.zeros((rows, cols), dtype=np.float64)
+        counts = np.zeros((rows, cols), dtype=np.int64)
+        np.add.at(sums, (ba.obs_ping_idx, ba.obs_bin_idx), reflectivity[ba.obs_vertex])
+        np.add.at(counts, (ba.obs_ping_idx, ba.obs_bin_idx), 1)
+
+        reflectivity_map = np.full((rows, cols), np.nan, dtype=np.float32)
+        hit_cells = counts > 0
+        reflectivity_map[hit_cells] = (sums[hit_cells] / counts[hit_cells]).astype(np.float32)
+
+        angles[~hit_cells] = np.nan
+
+        # Per-column propagation loss from the refined absorption coefficient
+        col_sums = np.bincount(ba.obs_bin_idx, weights=ba.obs_range, minlength=cols)
+        col_counts = np.bincount(ba.obs_bin_idx, minlength=cols)
+        prop_loss = np.ones(cols, dtype=np.float64)
+        observed_cols = col_counts > 0
+        col_slant = col_sums[observed_cols] / col_counts[observed_cols]
+        prop_loss[observed_cols] = 10.0 ** (-2.0 * absorption_coeff * col_slant / 10.0)
 
         np.savez_compressed(self.dataset.sonar_angles, data=angles)
         np.savez_compressed(self.dataset.sonar_loss, data=prop_loss)
-        np.savez_compressed(self.dataset.sonar_reflectivity, data=reflectivity)
+        np.savez_compressed(self.dataset.sonar_reflectivity, data=reflectivity_map)
 
     def print_stats(self) -> None:
         reflectivity = np.load(self.dataset.sonar_reflectivity)["data"]
@@ -254,6 +314,29 @@ class Decomposition:
         n = vertices.shape[0]
         v_weights = np.zeros((n,), dtype=np.float32)
         v_reflectivity = np.zeros((n,), dtype=np.float32)
+
+        if self.ba_cfg.get("enabled", False) and self.dataset.sonar_ba.exists():
+            # The bundle adjustment solved reflectivity per vertex directly,
+            # so no Gaussian-weighted splatting is needed.
+            ba_reflectivity = np.load(self.dataset.sonar_ba)["reflectivity_vertices"]
+            keep = min(n, ba_reflectivity.size)
+            v_reflectivity[:keep] = ba_reflectivity[:keep].astype(np.float32)
+
+            # Clip reflectivity values to remove outliers
+            is_observed = v_reflectivity > 0
+            v_reflectivity[is_observed] = np.clip(
+                v_reflectivity[is_observed],
+                np.percentile(v_reflectivity[is_observed], self.lower),
+                np.percentile(v_reflectivity[is_observed], self.upper)
+            )
+
+            np.savez(self.dataset.reflectivity_vertices, data=v_reflectivity)
+
+            encode_mesh(
+                str(self.dataset.mesh_ply),
+                faces, vertices, normals, colors, v_reflectivity
+            )
+            return
 
         reflectivity = np.load(self.dataset.sonar_reflectivity)["data"]
 

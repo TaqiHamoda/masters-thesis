@@ -75,5 +75,15 @@ synthesize:
   enabled: true                      # Synthesize SSS imagery using the existing vehicle trajectory
   translation: [0.0, 0.0, 0.0]        # Global translation applied to the trajectory before processing
 
+bundle_adjustment:                    # Joint reflectivity + beam pattern + absorption solver using pyceres
+  enabled: true                       # Solve reflectivity by bundle adjustment instead of closed-form decomposition
+  ang_samples: 360                    # Number of beam pattern gain samples per channel (Default: 360)
+  max_angle: 1.5707963267948966       # Maximum depression angle for the beam pattern in radians (Default: PI/2)
+  absorption_coeff: 0.1               # Initial absorption coefficient in dB/m (Default: 0.1)
+  max_iterations: 100                 # Maximum number of solver iterations (Default: 100)
+  loss_delta: 1000.0                  # Huber loss delta for robustness against outliers (Default: 1000.0)
+  gauge_weight: 1.0                   # Weight of the beam pattern scale prior resolving the global gauge (Default: 1.0)
+  num_threads: 24                     # Number of threads used by the solver (Default: 24)
+
 visualizations:
   enabled: false                       # Enable optical registration visualization (Requires sonar png, optical matches, and vertex reflectivity)
