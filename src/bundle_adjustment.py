@@ -1,9 +1,12 @@
+import csv
+import math
+
 import numpy as np
 import pyceres
 
 from typing import Dict
 
-from .dataset import Dataset, VertexHit
+from .dataset import Dataset
 
 # Two-way absorption loss (20-log rule on voltage samples): 10^(-2 * alpha * r / 10)
 # Its alpha derivative contributes (2 * ln(10) / 10) * r * loss per unit alpha
@@ -127,7 +130,27 @@ class BundleAdjustment:
 
         self.load_observations()
 
+    def _count_matches_rows(self, matches_files: list) -> int:
+        """
+        Counts newlines across all matches files in binary chunks to reserve an
+        upper bound of observations without parsing a single row.
+        """
+        total = 0
+        chunk_size = 1 << 20
+        for matches_file in matches_files:
+            with open(matches_file, 'rb') as f:
+                while True:
+                    chunk = f.read(chunk_size)
+                    if not chunk:
+                        break
+                    total += chunk.count(b'\n')
+
+        # Margin for header lines and files missing the trailing newline
+        return total + len(matches_files) + 1
+
     def load_observations(self):
+        matches_files = sorted(self.dataset.vertex_matches_dir.glob("*.csv"))
+
         waterfall = np.load(self.dataset.sonar_file)["data"]
         n_pings, n_bins = waterfall.shape
 
@@ -137,58 +160,66 @@ class BundleAdjustment:
             for sss in self.dataset.sonar.values()
         }
 
-        obs_vertex = []
-        obs_channel = []
-        obs_beam_bin = []
-        obs_cos_incidence = []
-        obs_range = []
-        obs_intensity = []
-        obs_ping_idx = []
-        obs_bin_idx = []
+        # Reserve the exact memory needed up front instead of growing Python lists
+        upper = self._count_matches_rows(matches_files)
 
-        for matches_file in sorted(self.dataset.vertex_matches_dir.glob("*.csv")):
-            for vertex in VertexHit.from_csv(matches_file):
-                if vertex.hit.ping_idx < 0 or vertex.hit.ping_idx >= n_pings:
-                    continue
-                if vertex.hit.bin_idx < 0 or vertex.hit.bin_idx >= n_bins:
-                    continue
+        obs_vertex = np.zeros(upper, dtype=np.int64)
+        obs_channel = np.zeros(upper, dtype=np.int8)
+        obs_beam_bin = np.zeros(upper, dtype=np.int16)
+        obs_cos_incidence = np.zeros(upper, dtype=np.float64)
+        obs_range = np.zeros(upper, dtype=np.float64)
+        obs_ping_idx = np.zeros(upper, dtype=np.int32)
+        obs_bin_idx = np.zeros(upper, dtype=np.int32)
 
-                num_samples = num_samples_map.get(vertex.hit.ping_idx)
-                if num_samples is None or num_samples <= 0:
-                    continue
+        count = 0
+        for matches_file in matches_files:
+            # Stream row dicts instead of VertexHit lists: constructing a
+            # VertexHit (Pose + AcousticHit) per row doubles the peak memory.
+            with open(matches_file) as f:
+                for row in csv.DictReader(f):
+                    ping_idx = int(row["ping_idx"])
+                    bin_idx = int(row["bin_idx"])
+                    if ping_idx < 0 or ping_idx >= n_pings:
+                        continue
+                    if bin_idx < 0 or bin_idx >= n_bins:
+                        continue
 
-                channel = PORT if vertex.hit.bin_idx < num_samples else STBD
+                    num_samples = num_samples_map.get(ping_idx)
+                    if num_samples is None or num_samples <= 0:
+                        continue
 
-                # Beam pattern lookup bin: theta in [0, max_angle) -> [0, ang_samples)
-                beam_bin = int(vertex.hit.incidence_angle / self.max_angle * self.ang_samples)
-                beam_bin = min(max(beam_bin, 0), self.ang_samples - 1)
+                    incidence_angle = float(row["incidence_angle"])
 
-                cos_incidence = min(max(np.cos(vertex.hit.incidence_angle), 0.0), 1.0)
+                    # Beam pattern lookup bin: theta in [0, max_angle) -> [0, ang_samples)
+                    beam_bin = int(incidence_angle / self.max_angle * self.ang_samples)
+                    beam_bin = min(max(beam_bin, 0), self.ang_samples - 1)
 
-                obs_vertex.append(vertex.vertex_idx)
-                obs_channel.append(channel)
-                obs_beam_bin.append(beam_bin)
-                obs_cos_incidence.append(cos_incidence)
-                obs_range.append(vertex.hit.distance)
-                obs_ping_idx.append(vertex.hit.ping_idx)
-                obs_bin_idx.append(vertex.hit.bin_idx)
-                # Gather only observed samples, kept as float64
-                obs_intensity.append(float(waterfall[vertex.hit.ping_idx, vertex.hit.bin_idx]))
+                    obs_vertex[count] = int(row["vertex_idx"])
+                    obs_channel[count] = 0 if bin_idx < num_samples else 1
+                    obs_beam_bin[count] = beam_bin
+                    obs_cos_incidence[count] = min(max(math.cos(incidence_angle), 0.0), 1.0)
+                    obs_range[count] = float(row["distance"])
+                    obs_ping_idx[count] = ping_idx
+                    obs_bin_idx[count] = bin_idx
+                    count += 1
 
-        if not obs_intensity:
+        if count == 0:
             raise ValueError("No valid vertex observations found for bundle adjustment.")
 
-        self.obs_vertex = np.array(obs_vertex, dtype=np.int64)
-        self.obs_channel = np.array(obs_channel, dtype=np.int64)
-        self.obs_beam_bin = np.array(obs_beam_bin, dtype=np.int64)
-        self.obs_cos_incidence = np.array(obs_cos_incidence, dtype=np.float64)
-        self.obs_range = np.array(obs_range, dtype=np.float64)
-        self.obs_intensity = np.array(obs_intensity, dtype=np.float64)
-        self.obs_ping_idx = np.array(obs_ping_idx, dtype=np.int64)
-        self.obs_bin_idx = np.array(obs_bin_idx, dtype=np.int64)
+        # Copy out the used prefix so the oversized reserved buffers are freed
+        self.obs_vertex = obs_vertex[:count].copy()
+        self.obs_channel = obs_channel[:count].copy()
+        self.obs_beam_bin = obs_beam_bin[:count].copy()
+        self.obs_cos_incidence = obs_cos_incidence[:count].copy()
+        self.obs_range = obs_range[:count].copy()
+        self.obs_ping_idx = obs_ping_idx[:count].copy()
+        self.obs_bin_idx = obs_bin_idx[:count].copy()
+
+        # Gather the observed intensities in one vectorized pass
+        self.obs_intensity = waterfall[self.obs_ping_idx, self.obs_bin_idx].astype(np.float64)
 
         if self.verbose:
-            print(f"Loaded {len(self.obs_intensity)} vertex observations "
+            print(f"Loaded {count} vertex observations "
                   f"({np.unique(self.obs_vertex).size} vertices)")
 
     def initial_reflectivity(self) -> np.ndarray:
