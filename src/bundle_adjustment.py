@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pyceres
 
-from typing import Dict
+from typing import Dict, List
 
 from .dataset import Dataset
 
@@ -12,59 +12,81 @@ from .dataset import Dataset
 # Its alpha derivative contributes (2 * ln(10) / 10) * r * loss per unit alpha
 ALPHA_JAC = 2.0 * np.log(10.0) / 10.0
 
-PORT = 0
-STBD = 1
 
-
-class ObservationCost(pyceres.CostFunction):
+class VertexObservationCost(pyceres.CostFunction):
     """
-    Residual for one vertex observation (Lambertian model):
+    Residuals for all observations of one mesh vertex (Lambertian model):
 
-        res = I - R_v * cos(theta) * G_channel[k(theta)] * 10^(-2 * alpha * r / 10)
+        res_i = I_i - R_v * cos(theta_i) * G_c[i][k_i] * 10^(-2 * alpha * r_i / 10)
 
-    Parameter blocks: [reflectivity (1,), beam gain channel (ang_samples,), absorption coeff (1,)]
+    One residual per observation of the vertex, batched into a single block so
+    the number of ceres residual blocks scales with vertices, not observations.
+
+    Parameter blocks:
+        [reflectivity (1,), beam gain scalar per unique (channel, bin) observed
+         by this vertex ((1,) each), absorption coeff (1,)]
     """
 
     def __init__(self,
-        intensity: float,
-        beam_bin: int,
-        slant_range: float,
-        cos_incidence: float,
-        ang_samples: int,
+        intensity: np.ndarray,
+        cos_incidence: np.ndarray,
+        slant_range: np.ndarray,
+        beam_local_idx: np.ndarray,
     ):
         pyceres.CostFunction.__init__(self)
-        self.set_num_residuals(1)
-        self.set_parameter_block_sizes([1, ang_samples, 1])
 
-        self.intensity = float(intensity)
-        self.beam_bin = int(beam_bin)
-        self.slant_range = float(slant_range)
-        self.cos_incidence = float(cos_incidence)
+        m = len(intensity)
+        n_beam_blocks = len(np.unique(beam_local_idx))
+        self.set_num_residuals(m)
+        self.set_parameter_block_sizes([1] + [1] * n_beam_blocks + [1])
+
+        # Views into the vertex-grouped observation arrays
+        self.intensity = intensity
+        self.cos_incidence = cos_incidence
+        self.slant_range = slant_range
+        self.beam_local_idx = beam_local_idx
 
     def Evaluate(self, parameters, residuals, jacobians) -> bool:
         reflectivity = parameters[0][0]
-        beam_gain = parameters[1][self.beam_bin]
-        alpha = parameters[2][0]
+        alpha = parameters[-1][0]
+
+        n_beam_blocks = len(parameters) - 2
+        gains = np.fromiter(
+            (parameters[1 + j][0] for j in range(n_beam_blocks)),
+            dtype=np.float64, count=n_beam_blocks,
+        )
 
         # Lambertian scattering factor from the known incidence angle
         scatter = self.cos_incidence
         # Loss factor starts at 1.0 by definition (0 dB at zero range)
         loss = 10.0 ** (-2.0 * alpha * self.slant_range / 10.0)
-        predicted = reflectivity * scatter * beam_gain * loss
+        predicted = reflectivity * gains[self.beam_local_idx] * scatter * loss
 
-        residuals[0] = self.intensity - predicted
+        res = self.intensity - predicted
+        try:
+            residuals[:] = res
+        except TypeError:
+            for i in range(len(res)):
+                residuals[i] = res[i]
 
         if jacobians is not None:
-            # d res / d R = -G[k] * cos(theta) * L
+            # Common factor: d res / d R = -G[k] * cos(theta) * L
             if jacobians[0] is not None:
-                jacobians[0][0] = -beam_gain * scatter * loss
-            # d res / d G[k] = -R * cos(theta) * L (rest of the beam row stays zero)
-            if jacobians[1] is not None:
-                jacobians[1][:] = 0.0
-                jacobians[1][self.beam_bin] = -reflectivity * scatter * loss
+                jacobians[0][:] = gains[self.beam_local_idx] * scatter * loss * -1.0
+
+            # d res_i / d G_j = -R * cos(theta_i) * loss_i for the obs of beam j
+            if any(jb is not None for jb in jacobians[1:1 + n_beam_blocks]):
+                base = scatter * loss * -1.0
+                mask = self.beam_local_idx[:, None] == np.arange(n_beam_blocks)[None, :]
+                weighted = base[:, None] * mask * reflectivity
+                for j in range(n_beam_blocks):
+                    jb = jacobians[1 + j]
+                    if jb is not None:
+                        jb[:] = weighted[:, j]
+
             # d res / d alpha = (2 * ln(10) / 10) * r * predicted
-            if jacobians[2] is not None:
-                jacobians[2][0] = ALPHA_JAC * self.slant_range * predicted
+            if jacobians[-1] is not None:
+                jacobians[-1][:] = ALPHA_JAC * self.slant_range * predicted
         return True
 
 
@@ -74,22 +96,27 @@ class BeamPriorCost(pyceres.CostFunction):
 
         res = (mean(beam) - 1) * gauge_weight
 
-    Parameter blocks: [beam gain channel (ang_samples,)]
+    Parameter blocks: one (1,) scalar per beam gain sample of the channel.
     """
 
     def __init__(self, ang_samples: int, gauge_weight: float):
         pyceres.CostFunction.__init__(self)
         self.set_num_residuals(1)
-        self.set_parameter_block_sizes([ang_samples])
+        self.set_parameter_block_sizes([1] * ang_samples)
 
         self.ang_samples = int(ang_samples)
         self.gauge_weight = float(gauge_weight)
 
     def Evaluate(self, parameters, residuals, jacobians) -> bool:
-        residuals[0] = (float(np.mean(parameters[0])) - 1.0) * self.gauge_weight
+        gains = np.fromiter(
+            (p[0] for p in parameters), dtype=np.float64, count=self.ang_samples
+        )
+        residuals[0] = (float(np.mean(gains)) - 1.0) * self.gauge_weight
 
-        if jacobians is not None and jacobians[0] is not None:
-            jacobians[0][:] = self.gauge_weight / self.ang_samples
+        if jacobians is not None:
+            for j in range(self.ang_samples):
+                if jacobians[j] is not None:
+                    jacobians[j][:] = self.gauge_weight / self.ang_samples
         return True
 
 
@@ -105,6 +132,11 @@ class BundleAdjustment:
 
     where theta is the incidence angle, r the slant range, and I the raw
     waterfall intensity at the hit's (ping_idx, bin_idx) sample.
+
+    Problem structure (scales to hundreds of millions of observations):
+      - One residual block per vertex holding all of its observations.
+      - Beam gains are 2 * ang_samples scalar parameter blocks so each residual
+        block references only the handful of gains it touches.
     """
 
     def __init__(self,
@@ -239,13 +271,13 @@ class BundleAdjustment:
         scatter = np.clip(self.obs_cos_incidence, 1.0e-3, 1.0)
         weighted = self.obs_intensity * compensation / scatter
 
-        n_vertices = int(self.obs_vertex.max()) + 1
-        sums = np.zeros(n_vertices, dtype=np.float64)
-        counts = np.zeros(n_vertices, dtype=np.int64)
+        vertex_ids = np.unique(self.obs_vertex)
+        sums = np.zeros(int(vertex_ids.max()) + 1, dtype=np.float64)
+        counts = np.zeros(int(vertex_ids.max()) + 1, dtype=np.int64)
         np.add.at(sums, self.obs_vertex, weighted)
         np.add.at(counts, self.obs_vertex, 1)
 
-        reflectivity = np.zeros(n_vertices, dtype=np.float64)
+        reflectivity = np.zeros(int(vertex_ids.max()) + 1, dtype=np.float64)
         observed = counts > 0
         reflectivity[observed] = sums[observed] / counts[observed]
 
@@ -262,53 +294,77 @@ class BundleAdjustment:
         """
         problem = pyceres.Problem()
 
-        # --- Global parameter blocks ---
-        beam_port = np.ones(self.ang_samples, dtype=np.float64)
-        beam_stbd = np.ones(self.ang_samples, dtype=np.float64)
+        # --- Global parameter blocks: one scalar per beam gain, plus alpha ---
+        beam_pool: List[np.ndarray] = []
+        for _ in range(2 * self.ang_samples):
+            block = np.array([1.0], dtype=np.float64)
+            problem.add_parameter_block(block, 1)
+            problem.set_parameter_lower_bound(block, 0, 0.0)
+            beam_pool.append(block)
+
         alpha = np.array([self.absorption_coeff], dtype=np.float64)
-
-        problem.add_parameter_block(beam_port, self.ang_samples)
-        problem.add_parameter_block(beam_stbd, self.ang_samples)
         problem.add_parameter_block(alpha, 1)
-
         problem.set_parameter_lower_bound(alpha, 0, 0.0)
-        for i in range(self.ang_samples):
-            problem.set_parameter_lower_bound(beam_port, i, 0.0)
-            problem.set_parameter_lower_bound(beam_stbd, i, 0.0)
 
-        # Pull the shared scale ambiguity between reflectivity and
-        # beam gains towards beam patterns with unit mean.
+        # Pull the shared scale ambiguity between reflectivity and beam gains
+        # towards beam patterns with unit mean (gauge fixed per channel).
         problem.add_residual_block(
-            BeamPriorCost(self.ang_samples, self.gauge_weight), None, [beam_port]
+            BeamPriorCost(self.ang_samples, self.gauge_weight),
+            None,
+            [beam_pool[c] for c in range(self.ang_samples)],
         )
         problem.add_residual_block(
-            BeamPriorCost(self.ang_samples, self.gauge_weight), None, [beam_stbd]
+            BeamPriorCost(self.ang_samples, self.gauge_weight),
+            None,
+            [beam_pool[self.ang_samples + c] for c in range(self.ang_samples)],
         )
 
-        # --- Local (per-vertex) parameter blocks and observation residuals ---
+        # --- Group the observations by vertex for the batched residual blocks ---
+        order = np.argsort(self.obs_vertex, kind="stable")
+        vertex_all = self.obs_vertex[order]
+        intensity_all = self.obs_intensity[order]
+        cos_all = self.obs_cos_incidence[order]
+        range_all = self.obs_range[order]
+        codes_all = self.obs_channel[order].astype(np.int64) * self.ang_samples \
+            + self.obs_beam_bin[order].astype(np.int64)
+
+        vertex_ids, group_starts = np.unique(vertex_all, return_index=True)
+        group_ends = np.append(group_starts[1:], len(vertex_all))
+
         init_reflectivity = self.initial_reflectivity()
-        loss = pyceres.HuberLoss(self.loss_delta)
 
-        rv_blocks = {}
-        for i in range(len(self.obs_intensity)):
-            v = int(self.obs_vertex[i])
-            rv_block = rv_blocks.get(v)
-            if rv_block is None:
-                rv_block = np.array([init_reflectivity[v]], dtype=np.float64)
-                rv_blocks[v] = rv_block
-                problem.add_parameter_block(rv_block, 1)
-                problem.set_parameter_lower_bound(rv_block, 0, 0.0)
+        # Ceres applies the loss to the squared norm of the whole residual
+        # block, but loss_delta is configured per observation: scale each
+        # block's delta by sqrt(m) so robustness semantics are preserved
+        # after batching all observations of a vertex into one block.
+        losses: List[pyceres.HuberLoss] = []
 
-            cost = ObservationCost(
-                intensity=self.obs_intensity[i],
-                beam_bin=self.obs_beam_bin[i],
-                slant_range=self.obs_range[i],
-                cos_incidence=self.obs_cos_incidence[i],
-                ang_samples=self.ang_samples,
+        rv_blocks: List[np.ndarray] = []
+        n_beam_blocks = 0
+        for v, start, end in zip(vertex_ids, group_starts, group_ends):
+            rv_block = np.array([init_reflectivity[v]], dtype=np.float64)
+            problem.add_parameter_block(rv_block, 1)
+            problem.set_parameter_lower_bound(rv_block, 0, 0.0)
+            rv_blocks.append(rv_block)
+
+            # Unique (channel, beam bin) gains touched by this vertex
+            uniq_codes, beam_local_idx = np.unique(codes_all[start:end], return_inverse=True)
+            beam_blocks = [beam_pool[c] for c in uniq_codes]
+            n_beam_blocks += len(beam_blocks)
+
+            cost = VertexObservationCost(
+                intensity=intensity_all[start:end],
+                cos_incidence=cos_all[start:end],
+                slant_range=range_all[start:end],
+                beam_local_idx=beam_local_idx,
             )
+            block_loss = pyceres.HuberLoss(self.loss_delta * math.sqrt(end - start))
+            losses.append(block_loss)
+            problem.add_residual_block(cost, block_loss, [rv_block, *beam_blocks, alpha])
 
-            beam_block = beam_port if self.obs_channel[i] == PORT else beam_stbd
-            problem.add_residual_block(cost, loss, [rv_block, beam_block, alpha])
+        if self.verbose:
+            print(f"Built problem: {len(rv_blocks)} vertex blocks, "
+                  f"{n_beam_blocks} beam block references, 2 gauge priors")
 
         # --- Solve ---
         options = pyceres.SolverOptions()
@@ -324,9 +380,18 @@ class BundleAdjustment:
             print(summary.BriefReport())
 
         # Collect the per-vertex solutions (zero for unobserved vertices)
-        n_vertices = int(self.obs_vertex.max()) + 1
-        reflectivity = np.zeros(n_vertices, dtype=np.float64)
-        for v, block in rv_blocks.items():
-            reflectivity[v] = block[0]
+        reflectivity = np.zeros(int(self.obs_vertex.max()) + 1, dtype=np.float64)
+        reflectivity[vertex_ids] = np.fromiter(
+            (block[0] for block in rv_blocks), dtype=np.float64, count=len(rv_blocks)
+        )
+
+        beam_port = np.fromiter(
+            (beam_pool[c][0] for c in range(self.ang_samples)),
+            dtype=np.float64, count=self.ang_samples,
+        )
+        beam_stbd = np.fromiter(
+            (beam_pool[self.ang_samples + c][0] for c in range(self.ang_samples)),
+            dtype=np.float64, count=self.ang_samples,
+        )
 
         return reflectivity, beam_port, beam_stbd, float(alpha[0]), summary
