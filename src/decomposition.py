@@ -11,6 +11,7 @@ from typing import Tuple
 from tqdm import tqdm
 
 from .dataset import Dataset, VertexHit
+from .bundle_adjustment import BundleAdjustment
 
 
 def rasterize_texture(
@@ -184,7 +185,8 @@ class Decomposition:
 
     def process_decomposition_ba(self) -> None:
         """Replaces the closed-form decomposition with a bundle adjustment solve."""
-        from .bundle_adjustment import BundleAdjustment
+
+        print("Performing Bundle Adjustment for Reflectivity Map...")
 
         cfg = self.ba_cfg
         ba = BundleAdjustment(

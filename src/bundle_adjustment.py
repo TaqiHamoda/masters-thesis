@@ -148,33 +148,32 @@ class BundleAdjustment:
 
         for matches_file in sorted(self.dataset.vertex_matches_dir.glob("*.csv")):
             for vertex in VertexHit.from_csv(matches_file):
-                hit = vertex.hit
-                if hit.ping_idx < 0 or hit.ping_idx >= n_pings:
+                if vertex.hit.ping_idx < 0 or vertex.hit.ping_idx >= n_pings:
                     continue
-                if hit.bin_idx < 0 or hit.bin_idx >= n_bins:
+                if vertex.hit.bin_idx < 0 or vertex.hit.bin_idx >= n_bins:
                     continue
 
-                num_samples = num_samples_map.get(hit.ping_idx)
+                num_samples = num_samples_map.get(vertex.hit.ping_idx)
                 if num_samples is None or num_samples <= 0:
                     continue
 
-                channel = PORT if hit.bin_idx < num_samples else STBD
+                channel = PORT if vertex.hit.bin_idx < num_samples else STBD
 
                 # Beam pattern lookup bin: theta in [0, max_angle) -> [0, ang_samples)
-                beam_bin = int(hit.incidence_angle / self.max_angle * self.ang_samples)
+                beam_bin = int(vertex.hit.incidence_angle / self.max_angle * self.ang_samples)
                 beam_bin = min(max(beam_bin, 0), self.ang_samples - 1)
 
-                cos_incidence = min(max(np.cos(hit.incidence_angle), 0.0), 1.0)
+                cos_incidence = min(max(np.cos(vertex.hit.incidence_angle), 0.0), 1.0)
 
                 obs_vertex.append(vertex.vertex_idx)
                 obs_channel.append(channel)
                 obs_beam_bin.append(beam_bin)
                 obs_cos_incidence.append(cos_incidence)
-                obs_range.append(hit.distance)
-                obs_ping_idx.append(hit.ping_idx)
-                obs_bin_idx.append(hit.bin_idx)
+                obs_range.append(vertex.hit.distance)
+                obs_ping_idx.append(vertex.hit.ping_idx)
+                obs_bin_idx.append(vertex.hit.bin_idx)
                 # Gather only observed samples, kept as float64
-                obs_intensity.append(float(waterfall[hit.ping_idx, hit.bin_idx]))
+                obs_intensity.append(float(waterfall[vertex.hit.ping_idx, vertex.hit.bin_idx]))
 
         if not obs_intensity:
             raise ValueError("No valid vertex observations found for bundle adjustment.")
