@@ -11,7 +11,7 @@ from typing import Tuple
 from tqdm import tqdm
 
 from .dataset import Dataset, VertexHit
-from .bundle_adjustment import BundleAdjustment
+from .bundle_adjustment import BundleAdjustment, collect_garbage
 
 
 def rasterize_texture(
@@ -211,6 +211,11 @@ class Decomposition:
             absorption_coeff=absorption_coeff,
         )
 
+        # Snapshot only the per-observation values needed to build the maps,
+        # then release the (potentially mesh-sized) solver outputs
+        obs_values = reflectivity[ba.obs_vertex]
+        del reflectivity, beam_port, beam_stbd
+
         # Incidence angles from the vertex hits (invalid cells stay NaN)
         angles, is_valid = self.get_incidence_angle_map()
 
@@ -218,15 +223,10 @@ class Decomposition:
 
         # Average the per-vertex reflectivity over each (ping, bin) cell
         sums = np.zeros((rows, cols), dtype=np.float64)
-        counts = np.zeros((rows, cols), dtype=np.int64)
-        np.add.at(sums, (ba.obs_ping_idx, ba.obs_bin_idx), reflectivity[ba.obs_vertex])
+        counts = np.zeros((rows, cols), dtype=np.int32)
+        np.add.at(sums, (ba.obs_ping_idx, ba.obs_bin_idx), obs_values)
+        del obs_values
         np.add.at(counts, (ba.obs_ping_idx, ba.obs_bin_idx), 1)
-
-        reflectivity_map = np.full((rows, cols), np.nan, dtype=np.float32)
-        hit_cells = counts > 0
-        reflectivity_map[hit_cells] = (sums[hit_cells] / counts[hit_cells]).astype(np.float32)
-
-        angles[~hit_cells] = np.nan
 
         # Per-column propagation loss from the refined absorption coefficient
         col_sums = np.bincount(ba.obs_bin_idx, weights=ba.obs_range, minlength=cols)
@@ -235,10 +235,26 @@ class Decomposition:
         observed_cols = col_counts > 0
         col_slant = col_sums[observed_cols] / col_counts[observed_cols]
         prop_loss[observed_cols] = 10.0 ** (-2.0 * absorption_coeff * col_slant / 10.0)
+        del col_sums, col_counts, col_slant, observed_cols
+
+        # The bundle adjustment object (and its remaining observation arrays)
+        # are no longer needed once the column statistics are computed
+        del ba
+        collect_garbage()
+
+        reflectivity_map = np.full((rows, cols), np.nan, dtype=np.float32)
+        hit_cells = counts > 0
+        reflectivity_map[hit_cells] = (sums[hit_cells] / counts[hit_cells]).astype(np.float32)
+        del sums, counts, hit_cells
+
+        # Cells without angle observations stay NaN in the angles map
+        angles[~is_valid] = np.nan
 
         np.savez_compressed(self.dataset.sonar_angles, data=angles)
         np.savez_compressed(self.dataset.sonar_loss, data=prop_loss)
         np.savez_compressed(self.dataset.sonar_reflectivity, data=reflectivity_map)
+        del angles, is_valid, reflectivity_map, prop_loss
+        collect_garbage()
 
     def print_stats(self) -> None:
         reflectivity = np.load(self.dataset.sonar_reflectivity)["data"]

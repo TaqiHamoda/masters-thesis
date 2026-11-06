@@ -1,16 +1,43 @@
 import csv
+import ctypes
+import gc
 import math
+import os
 
 import numpy as np
 import pyceres
 
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from .dataset import Dataset
 
 # Two-way absorption loss (20-log rule on voltage samples): 10^(-2 * alpha * r / 10)
 # Its alpha derivative contributes (2 * ln(10) / 10) * r * loss per unit alpha
 ALPHA_JAC = 2.0 * np.log(10.0) / 10.0
+
+
+def collect_garbage():
+    """
+    Forces a full garbage collection pass and returns freed heap pages to the
+    operating system (on glibc). Call this after deleting memory heavy variables.
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass  # malloc_trim is a glibc extension; ignore elsewhere
+
+
+def current_rss_mb() -> float:
+    """Returns this process's resident set size in MB (or -1 if unavailable)."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS"):
+                    return int(line.split()[1]) / 1024.0
+    except OSError:
+        pass
+    return -1.0
 
 
 class VertexObservationCost(pyceres.CostFunction):
@@ -22,47 +49,50 @@ class VertexObservationCost(pyceres.CostFunction):
     One residual per observation of the vertex, batched into a single block so
     the number of ceres residual blocks scales with vertices, not observations.
 
+    To keep the per-block memory footprint small, no observation data is copied
+    at construction: the cost holds a shared reference to the four canonical
+    observation arrays (intensity, cos of incidence, slant range, beam-local
+    index) plus the (start, size) span of this vertex's observations.
+
     Parameter blocks:
         [reflectivity (1,), beam gain scalar per unique (channel, bin) observed
          by this vertex ((1,) each), absorption coeff (1,)]
     """
 
     def __init__(self,
-        intensity: np.ndarray,
-        cos_incidence: np.ndarray,
-        slant_range: np.ndarray,
-        beam_local_idx: np.ndarray,
+        bases: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+        start: int,
+        size: int,
+        n_beam_blocks: int,
     ):
         pyceres.CostFunction.__init__(self)
-
-        m = len(intensity)
-        n_beam_blocks = len(np.unique(beam_local_idx))
-        self.set_num_residuals(m)
+        self.set_num_residuals(size)
         self.set_parameter_block_sizes([1] + [1] * n_beam_blocks + [1])
 
-        # Views into the vertex-grouped observation arrays
-        self.intensity = intensity
-        self.cos_incidence = cos_incidence
-        self.slant_range = slant_range
-        self.beam_local_idx = beam_local_idx
+        self.bases = bases
+        self.start = int(start)
+        self.size = int(size)
+        self.n_beam_blocks = int(n_beam_blocks)
 
     def Evaluate(self, parameters, residuals, jacobians) -> bool:
+        start, end = self.start, self.start + self.size
+
         reflectivity = parameters[0][0]
         alpha = parameters[-1][0]
 
-        n_beam_blocks = len(parameters) - 2
+        g = self.n_beam_blocks
         gains = np.fromiter(
-            (parameters[1 + j][0] for j in range(n_beam_blocks)),
-            dtype=np.float64, count=n_beam_blocks,
+            (parameters[1 + j][0] for j in range(g)),
+            dtype=np.float64, count=g,
         )
 
         # Lambertian scattering factor from the known incidence angle
-        scatter = self.cos_incidence
+        scatter = self.bases[1][start:end]
         # Loss factor starts at 1.0 by definition (0 dB at zero range)
-        loss = 10.0 ** (-2.0 * alpha * self.slant_range / 10.0)
-        predicted = reflectivity * gains[self.beam_local_idx] * scatter * loss
+        loss = 10.0 ** (-2.0 * alpha * self.bases[2][start:end] / 10.0)
+        predicted = reflectivity * gains[self.bases[3][start:end]] * scatter * loss
 
-        res = self.intensity - predicted
+        res = self.bases[0][start:end] - predicted
         try:
             residuals[:] = res
         except TypeError:
@@ -70,23 +100,25 @@ class VertexObservationCost(pyceres.CostFunction):
                 residuals[i] = res[i]
 
         if jacobians is not None:
-            # Common factor: d res / d R = -G[k] * cos(theta) * L
+            # d res / d R = -G[k] * cos(theta) * L
             if jacobians[0] is not None:
-                jacobians[0][:] = gains[self.beam_local_idx] * scatter * loss * -1.0
+                jacobians[0][:] = gains[self.bases[3][start:end]] * scatter * loss * -1.0
 
             # d res_i / d G_j = -R * cos(theta_i) * loss_i for the obs of beam j
-            if any(jb is not None for jb in jacobians[1:1 + n_beam_blocks]):
+            if any(jb is not None for jb in jacobians[1:1 + g]):
+                beam_local = self.bases[3][start:end]
                 base = scatter * loss * -1.0
-                mask = self.beam_local_idx[:, None] == np.arange(n_beam_blocks)[None, :]
+                mask = beam_local[:, None] == np.arange(g)[None, :]
                 weighted = base[:, None] * mask * reflectivity
-                for j in range(n_beam_blocks):
+                for j in range(g):
                     jb = jacobians[1 + j]
                     if jb is not None:
                         jb[:] = weighted[:, j]
+                del beam_local, base, mask, weighted
 
             # d res / d alpha = (2 * ln(10) / 10) * r * predicted
             if jacobians[-1] is not None:
-                jacobians[-1][:] = ALPHA_JAC * self.slant_range * predicted
+                jacobians[-1][:] = ALPHA_JAC * self.bases[2][start:end] * predicted
         return True
 
 
@@ -137,6 +169,12 @@ class BundleAdjustment:
       - One residual block per vertex holding all of its observations.
       - Beam gains are 2 * ang_samples scalar parameter blocks so each residual
         block references only the handful of gains it touches.
+      - Per-vertex reflectivity values live in one contiguous buffer; each
+        ceres parameter block is a view into it.
+      - solve() reorders the observation arrays by vertex in place, so after
+        solving the obs_* attributes are in vertex-sorted order (their contents
+        are unchanged and every downstream use is order independent). Only the
+        arrays the decomposition stage needs are kept afterwards.
     """
 
     def __init__(self,
@@ -238,48 +276,56 @@ class BundleAdjustment:
         if count == 0:
             raise ValueError("No valid vertex observations found for bundle adjustment.")
 
-        # Copy out the used prefix so the oversized reserved buffers are freed
-        self.obs_vertex = obs_vertex[:count].copy()
-        self.obs_channel = obs_channel[:count].copy()
-        self.obs_beam_bin = obs_beam_bin[:count].copy()
-        self.obs_cos_incidence = obs_cos_incidence[:count].copy()
-        self.obs_range = obs_range[:count].copy()
-        self.obs_ping_idx = obs_ping_idx[:count].copy()
-        self.obs_bin_idx = obs_bin_idx[:count].copy()
+        # Copy out the used prefix and release each oversized reserved buffer as
+        # soon as its copy exists (instead of keeping all of them until return)
+        self.obs_vertex, obs_vertex = obs_vertex[:count].copy(), None
+        self.obs_channel, obs_channel = obs_channel[:count].copy(), None
+        self.obs_beam_bin, obs_beam_bin = obs_beam_bin[:count].copy(), None
+        self.obs_cos_incidence, obs_cos_incidence = obs_cos_incidence[:count].copy(), None
+        self.obs_range, obs_range = obs_range[:count].copy(), None
+        self.obs_ping_idx, obs_ping_idx = obs_ping_idx[:count].copy(), None
+        self.obs_bin_idx, obs_bin_idx = obs_bin_idx[:count].copy(), None
+        del obs_vertex, obs_channel, obs_beam_bin, obs_cos_incidence, obs_range, obs_ping_idx, obs_bin_idx
 
-        # Gather the observed intensities in one vectorized pass
+        # Gather the observed intensities in one vectorized pass, then release
+        # the full waterfall (the largest allocation of this phase)
         self.obs_intensity = waterfall[self.obs_ping_idx, self.obs_bin_idx].astype(np.float64)
+        del waterfall
+        collect_garbage()
 
         if self.verbose:
-            print(f"Loaded {count} vertex observations "
-                  f"({np.unique(self.obs_vertex).size} vertices)")
+            print(f"Loaded {count} vertex observations, RSS {current_rss_mb():.1f} MB")
 
-    def initial_reflectivity(self) -> np.ndarray:
+    def initial_reflectivity(self,
+        vertex_ids: np.ndarray,
+        group_starts: np.ndarray,
+        group_ends: np.ndarray,
+    ) -> np.ndarray:
         """
         Reflectivity solved using the initial global parameters
-        (G = 1, alpha = absorption_coeff) with the Lambertian factor
-        divided out:
+        (G = 1, alpha = absorption_coeff) with the Lambertian factor divided out:
 
             R_v = mean over observations of I * 10^(2 * alpha_init * r / 10) / cos(theta)
 
-        Near-grazing observations (cos(theta) -> 0) carry almost no signal
-        about reflectivity, so the divisor is floored to avoid exploding
-        the initialization.
+        Must be called with the vertex-sorted observation arrays (solve Phase A)
+        so per-vertex means reduce to contiguous segments. Near-grazing
+        observations (cos(theta) -> 0) carry almost no signal about reflectivity,
+        so the divisor is floored to avoid exploding the initialization.
         """
         compensation = 10.0 ** (2.0 * self.absorption_coeff * self.obs_range / 10.0)
-        # Floor the Lambertian divisor: grazing hits have no signal to divide
-        scatter = np.clip(self.obs_cos_incidence, 1.0e-3, 1.0)
-        weighted = self.obs_intensity * compensation / scatter
+        weighted = self.obs_intensity * compensation
+        del compensation
 
-        vertex_ids = np.unique(self.obs_vertex)
-        sums = np.zeros(int(vertex_ids.max()) + 1, dtype=np.float64)
-        counts = np.zeros(int(vertex_ids.max()) + 1, dtype=np.int64)
-        np.add.at(sums, self.obs_vertex, weighted)
-        np.add.at(counts, self.obs_vertex, 1)
+        # Floor the Lambertian divisor: grazing hits have no signal to divide
+        weighted /= np.clip(self.obs_cos_incidence, 1.0e-3, 1.0)
+
+        sums = np.add.reduceat(weighted, group_starts)
+        del weighted
+        collect_garbage()
 
         reflectivity = np.zeros(int(vertex_ids.max()) + 1, dtype=np.float64)
-        observed = counts > 0
-        reflectivity[observed] = sums[observed] / counts[observed]
+        reflectivity[vertex_ids] = sums / (group_ends - group_starts)
+        del sums
 
         return reflectivity
 
@@ -294,7 +340,8 @@ class BundleAdjustment:
         """
         problem = pyceres.Problem()
 
-        # --- Global parameter blocks: one scalar per beam gain, plus alpha ---
+        # --- Phase 0: global parameter blocks ---
+        # One scalar block per beam gain sample (port codes 0..N-1, stbd N..2N-1)
         beam_pool: List[np.ndarray] = []
         for _ in range(2 * self.ang_samples):
             block = np.array([1.0], dtype=np.float64)
@@ -319,54 +366,86 @@ class BundleAdjustment:
             [beam_pool[self.ang_samples + c] for c in range(self.ang_samples)],
         )
 
-        # --- Group the observations by vertex for the batched residual blocks ---
+        # --- Phase A: reorder the observation arrays by vertex ---
+        # The sorted arrays replace the attributes in place so only one copy of
+        # each is ever alive; the permutation indexes are released as soon as
+        # they are consumed.
         order = np.argsort(self.obs_vertex, kind="stable")
-        vertex_all = self.obs_vertex[order]
-        intensity_all = self.obs_intensity[order]
-        cos_all = self.obs_cos_incidence[order]
-        range_all = self.obs_range[order]
-        codes_all = self.obs_channel[order].astype(np.int64) * self.ang_samples \
-            + self.obs_beam_bin[order].astype(np.int64)
+        self.obs_vertex = self.obs_vertex[order]
+        self.obs_intensity = self.obs_intensity[order]
+        self.obs_cos_incidence = self.obs_cos_incidence[order]
+        self.obs_range = self.obs_range[order]
 
-        vertex_ids, group_starts = np.unique(vertex_all, return_index=True)
-        group_ends = np.append(group_starts[1:], len(vertex_all))
-
-        init_reflectivity = self.initial_reflectivity()
-
-        # Ceres applies the loss to the squared norm of the whole residual
-        # block, but loss_delta is configured per observation: scale each
-        # block's delta by sqrt(m) so robustness semantics are preserved
-        # after batching all observations of a vertex into one block.
-        losses: List[pyceres.HuberLoss] = []
-
-        rv_blocks: List[np.ndarray] = []
-        n_beam_blocks = 0
-        for v, start, end in zip(vertex_ids, group_starts, group_ends):
-            rv_block = np.array([init_reflectivity[v]], dtype=np.float64)
-            problem.add_parameter_block(rv_block, 1)
-            problem.set_parameter_lower_bound(rv_block, 0, 0.0)
-            rv_blocks.append(rv_block)
-
-            # Unique (channel, beam bin) gains touched by this vertex
-            uniq_codes, beam_local_idx = np.unique(codes_all[start:end], return_inverse=True)
-            beam_blocks = [beam_pool[c] for c in uniq_codes]
-            n_beam_blocks += len(beam_blocks)
-
-            cost = VertexObservationCost(
-                intensity=intensity_all[start:end],
-                cos_incidence=cos_all[start:end],
-                slant_range=range_all[start:end],
-                beam_local_idx=beam_local_idx,
-            )
-            block_loss = pyceres.HuberLoss(self.loss_delta * math.sqrt(end - start))
-            losses.append(block_loss)
-            problem.add_residual_block(cost, block_loss, [rv_block, *beam_blocks, alpha])
+        # Channel and beam bin only exist to build per-observation beam codes:
+        # codes are int32 (2 * ang_samples fits easily) and the raw columns are
+        # released immediately after.
+        codes = self.obs_channel[order].astype(np.int32) * np.int32(self.ang_samples)
+        codes += self.obs_beam_bin[order]
+        del self.obs_channel, self.obs_beam_bin, order
+        collect_garbage()
 
         if self.verbose:
-            print(f"Built problem: {len(rv_blocks)} vertex blocks, "
-                  f"{n_beam_blocks} beam block references, 2 gauge priors")
+            print(f"Sorted observations by vertex, RSS {current_rss_mb():.1f} MB")
 
-        # --- Solve ---
+        # --- Phase B: group boundaries (obs_vertex is sorted: no re-sort copy) ---
+        boundaries = np.flatnonzero(self.obs_vertex[1:] > self.obs_vertex[:-1]) + 1
+        group_starts = np.concatenate((np.array([0], dtype=np.int64), boundaries))
+        del boundaries
+        vertex_ids = self.obs_vertex[group_starts]
+        group_ends = np.append(group_starts[1:], self.obs_vertex.size)
+        collect_garbage()
+
+        # --- Phase C: initial reflectivity from the grouped observations ---
+        init_reflectivity = self.initial_reflectivity(vertex_ids, group_starts, group_ends)
+
+        # --- Phase D: build one residual block per vertex ---
+        # Per-vertex reflectivity values live in a single contiguous buffer;
+        # each ceres parameter block is a view into it.
+        rv_buffer = init_reflectivity[vertex_ids]
+        del init_reflectivity
+
+        # Beam-local indices are stored per observation in one shared array;
+        # int16 suffices (bounded by the observations of a single vertex).
+        beam_local = np.zeros(self.obs_vertex.size, dtype=np.int16)
+
+        bases = (self.obs_intensity, self.obs_cos_incidence, self.obs_range, beam_local)
+
+        n_beam_refs = 0
+        for i, (start, end) in enumerate(zip(group_starts, group_ends)):
+            # Loop temporaries (rv_block, uniq_codes, inverses, beam_blocks) are
+            # rebound each iteration; CPython's reference counting frees the
+            # previous iteration's objects immediately.
+            rv_block = rv_buffer[i:i + 1]
+            problem.add_parameter_block(rv_block, 1)
+            problem.set_parameter_lower_bound(rv_block, 0, 0.0)
+
+            # Unique (channel, beam bin) gains touched by this vertex
+            uniq_codes, inverses = np.unique(codes[start:end], return_inverse=True)
+            beam_local[start:end] = inverses.astype(np.int16)
+            del inverses
+
+            beam_blocks = [beam_pool[c] for c in uniq_codes]
+            del uniq_codes
+            n_beam_refs += len(beam_blocks)
+
+            cost = VertexObservationCost(bases, start, end - start, len(beam_blocks))
+            problem.add_residual_block(
+                cost,
+                # Ceres applies the loss to the squared norm of the whole
+                # residual block: scale delta by sqrt(m) to keep the configured
+                # per-observation robustness after batching.
+                pyceres.HuberLoss(self.loss_delta * math.sqrt(end - start)),
+                [rv_block, *beam_blocks, alpha],
+            )
+
+        del codes, beam_local, bases
+        collect_garbage()
+
+        if self.verbose:
+            print(f"Built problem: {vertex_ids.size} vertex blocks, "
+                  f"{n_beam_refs} beam block references, RSS {current_rss_mb():.1f} MB")
+
+        # --- Phase E: solve ---
         options = pyceres.SolverOptions()
         options.linear_solver_type = pyceres.LinearSolverType.SPARSE_SCHUR
         options.max_num_iterations = self.max_iterations
@@ -378,12 +457,11 @@ class BundleAdjustment:
 
         if self.verbose:
             print(summary.BriefReport())
+            print(f"Solve finished, RSS {current_rss_mb():.1f} MB")
 
-        # Collect the per-vertex solutions (zero for unobserved vertices)
-        reflectivity = np.zeros(int(self.obs_vertex.max()) + 1, dtype=np.float64)
-        reflectivity[vertex_ids] = np.fromiter(
-            (block[0] for block in rv_blocks), dtype=np.float64, count=len(rv_blocks)
-        )
+        # --- Phase F: collect results and release everything heavy ---
+        reflectivity = np.zeros(int(self.obs_vertex[-1]) + 1, dtype=np.float64)
+        reflectivity[vertex_ids] = rv_buffer
 
         beam_port = np.fromiter(
             (beam_pool[c][0] for c in range(self.ang_samples)),
@@ -393,5 +471,16 @@ class BundleAdjustment:
             (beam_pool[self.ang_samples + c][0] for c in range(self.ang_samples)),
             dtype=np.float64, count=self.ang_samples,
         )
+        absorption = float(alpha[0])
 
-        return reflectivity, beam_port, beam_stbd, float(alpha[0]), summary
+        # Release the solver with its per-block structures, then the observation
+        # columns the decomposition stage does not need (intensity and cosine are
+        # solver inputs only; ping, bin, range, and vertex are kept).
+        del problem, beam_pool, rv_buffer
+        del self.obs_intensity, self.obs_cos_incidence
+        collect_garbage()
+
+        if self.verbose:
+            print(f"Collected results, RSS {current_rss_mb():.1f} MB")
+
+        return reflectivity, beam_port, beam_stbd, absorption, summary
