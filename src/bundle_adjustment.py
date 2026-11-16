@@ -136,11 +136,14 @@ class VertexCost(pyceres.CostFunction):
             coeffs = beam_params[self._channel_slot(channel)]
 
             # Beam gain in log space: log_G = T[local_idx] @ coeffs
-            G = np.exp(T[local_idx] @ coeffs)
+            log_G = T[local_idx] @ coeffs
+            # Clamp to prevent overflow/underflow in exp: keep |log_G| <= 10
+            G = np.exp(np.clip(log_G, -10.0, 10.0))
 
             # Full weight: W_k * G
             WG = W[local_idx] * G
 
+            # Accumulate sums carefully to avoid overflow
             sum_I2 += I[local_idx] ** 2
             sum_IW += I[local_idx] * WG
             sum_W2 += WG ** 2
@@ -439,6 +442,18 @@ class BundleAdjustment:
         beam_stbd_coeffs = np.zeros(self.beam_degree + 1, dtype=np.float64)
         problem.add_parameter_block(beam_port_coeffs, self.beam_degree + 1)
         problem.add_parameter_block(beam_stbd_coeffs, self.beam_degree + 1)
+
+        # Bound beam coefficients to prevent overflow in exp(T @ coeffs).
+        # Chebyshev polynomials T_k are bounded by |T_k(u)| <= 1 for u in [-1, 1].
+        # With degree d, |T @ c| <= sum |c_i|. To keep |log_G| <= 3 (G in [0.05, 20]),
+        # we need sum |c_i| <= 3.  For degree 6 (7 coeffs), bound each |c_i| <= 3/7 ≈ 0.43.
+        # Use [-0.5, 0.5] for all coefficients for safety (sum |c_i| <= 3.5 for degree 6).
+        coeff_bound = 0.5
+        for i in range(self.beam_degree + 1):
+            problem.set_parameter_lower_bound(beam_port_coeffs, i, -coeff_bound)
+            problem.set_parameter_upper_bound(beam_port_coeffs, i, coeff_bound)
+            problem.set_parameter_lower_bound(beam_stbd_coeffs, i, -coeff_bound)
+            problem.set_parameter_upper_bound(beam_stbd_coeffs, i, coeff_bound)
 
         alpha = np.array([self.absorption_coeff], dtype=np.float64)
         problem.add_parameter_block(alpha, 1)
