@@ -165,12 +165,25 @@ class VertexCost(pyceres.CostFunction):
                     d_sum_W2_dbeam_stbd += 2 * WG * dWG_dbeam
 
         # Compute minimized cost residual
-        if sum_W2 < 1e-30:
-            residual = np.sqrt(sum_I2)  # Fallback: all observations zero
+        # Clamp to avoid sqrt(negative) from numerical instability when sum_W2 is tiny
+        if sum_W2 < 1e-15:
+            # All WG effectively zero: residual = sqrt(sum I_k^2)
+            residual = np.sqrt(sum_I2) if sum_I2 >= 0 else 0.0
         else:
-            residual = np.sqrt(sum_I2 - sum_IW ** 2 / sum_W2)
+            residual_value = sum_I2 - sum_IW ** 2 / sum_W2
+            residual = np.sqrt(max(0.0, residual_value))
 
         residuals[0] = residual
+
+        # If we clamped a negative residual_value to zero, the vertex contributes
+        # no signal to the optimization, so zero out its Jacobian entirely.
+        if residual == 0.0 and sum_W2 >= 1e-15:
+            # residual_value was negative and got clamped to 0
+            if jacobians is not None:
+                for jb in jacobians:
+                    if jb is not None:
+                        jb[:] = 0.0
+                return True
 
         if jacobians is not None:
             # Jacobian of residual w.r.t. parameters
@@ -179,7 +192,8 @@ class VertexCost(pyceres.CostFunction):
             # df/dp = -2*sum_IW*d(sum_IW)/dp/sum_W2 + sum_IW^2*d(sum_W2)/dp/sum_W2^2
             #       = (sum_IW/sum_W2) * (d(sum_W2)/dp/sum_W2 - 2*d(sum_IW)/dp/sum_IW)
 
-            if sum_W2 < 1e-30 or residual < 1e-30:
+            if sum_W2 < 1e-15 or residual < 1e-15:
+                # Degenerate case (near-zero weights or residual): zero out Jacobian
                 for jb in jacobians:
                     if jb is not None:
                         jb[:] = 0.0
@@ -357,17 +371,28 @@ class BundleAdjustment:
                     if num_samples is None or num_samples <= 0:
                         continue
 
-                    incidence_angle = float(row["incidence_angle"])
+                    try:
+                        incidence_angle = float(row["incidence_angle"])
+                        distance = float(row["distance"])
+                        vertex_idx = int(row["vertex_idx"])
+                    except (ValueError, TypeError):
+                        continue
+
+                    # Skip NaN/inf in geometry
+                    if (math.isnan(incidence_angle) or math.isinf(incidence_angle) or
+                            math.isnan(distance) or math.isinf(distance) or
+                            distance <= 0):
+                        continue
 
                     # Half-open/current observation angles can graze the limits
                     theta = min(max(incidence_angle, 0.0), self.max_angle)
 
-                    obs_vertex[count] = int(row["vertex_idx"])
+                    obs_vertex[count] = vertex_idx
                     obs_channel[count] = 0 if bin_idx < num_samples else 1
                     obs_cos_incidence[count] = min(max(np.cos(theta), 0.0), 1.0)
                     # Normalized pattern angle of the Chebyshev basis
                     obs_pattern_angle[count] = np.float32(2.0 * theta / self.max_angle - 1.0)
-                    obs_range[count] = float(row["distance"])
+                    obs_range[count] = distance
                     obs_ping_idx[count] = ping_idx
                     obs_bin_idx[count] = bin_idx
                     count += 1
@@ -542,7 +567,7 @@ class BundleAdjustment:
                 sum_IW += I[local_idx] * WG
                 sum_W2 += WG ** 2
 
-            if sum_W2 > 1e-30:
+            if sum_W2 > 1e-15:
                 reflectivity[vid] = sum_IW / sum_W2
             else:
                 reflectivity[vid] = 0.0
