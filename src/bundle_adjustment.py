@@ -37,112 +37,180 @@ def chebyshev_basis(u: np.ndarray, degree: int) -> np.ndarray:
     return T
 
 
-class VertexObservationCost(pyceres.CostFunction):
+class VertexCost(pyceres.CostFunction):
     """
-    Residuals for all observations of one mesh vertex (Lambertian model with a
-    parametric beam pattern):
+    Residual for one mesh vertex after analytically eliminating its reflectivity.
 
-        res_i = I_i - R_v * cos(theta_i) * G_c[i](theta_i) * 10^(-2 * alpha * r_i / 10)
+    Given fixed beam and absorption parameters, the optimal R_v is
 
-        G_c(theta) = exp( sum_k c_[c,k] * T_k(2 * theta / max_angle - 1) )
+        R_v* = Σ_k I_k * W_k / Σ_k W_k^2,   W_k = cos(theta_k) * G_k * L_k
 
-    One residual per observation of the vertex, batched into a single block so
-    the number of ceres residual blocks scales with vertices, not observations.
+    and the minimized cost is
+
+        cost_v = Σ_k I_k^2 - (Σ_k I_k * W_k)^2 / Σ_k W_k^2.
+
+    One scalar residual per vertex; parameter blocks are only the three global
+    blocks: [beam_port_coeffs, beam_stbd_coeffs, alpha]. The cost function holds
+    only the start/end indices into the BundleAdjustment's observation arrays
+    and references to those arrays, avoiding copying observation data.
 
     Parameter blocks:
-        [reflectivity (1,), beam coefficients of each channel observed by this
-         vertex ((degree + 1,) each), absorption coeff (1,)]
+        [beam_port_coeffs (degree+1,), beam_stbd_coeffs (degree+1,), alpha (1,)]
     """
 
-    def __init__(self,
-        bases: Tuple[np.ndarray, ...],
+    def __init__(
+        self,
         start: int,
-        size: int,
+        end: int,
+        obs_intensity: np.ndarray,
+        obs_cos_incidence: np.ndarray,
+        obs_range: np.ndarray,
+        obs_pattern_angle: np.ndarray,
+        obs_channel: np.ndarray,
         degree: int,
         port_present: bool,
         stbd_present: bool,
     ):
         pyceres.CostFunction.__init__(self)
 
-        beam_sizes = [degree + 1] * (int(port_present) + int(stbd_present))
-        self.set_num_residuals(size)
-        self.set_parameter_block_sizes([1] + beam_sizes + [1])
+        self.set_num_residuals(1)
 
-        self.bases = bases
+        beam_sizes = [degree + 1] * (int(port_present) + int(stbd_present))
+        self.set_parameter_block_sizes(beam_sizes + [1])
+
         self.start = int(start)
-        self.size = int(size)
+        self.end = int(end)
+        # Keep references to the global observation arrays — no data is copied
+        self.obs_intensity = obs_intensity
+        self.obs_cos_incidence = obs_cos_incidence
+        self.obs_range = obs_range
+        self.obs_pattern_angle = obs_pattern_angle
+        self.obs_channel = obs_channel
         self.degree = int(degree)
         self.port_present = bool(port_present)
         self.stbd_present = bool(stbd_present)
+        self.port_slot = 0
+        self.stbd_slot = 1 if port_present else 0
 
     def _channel_slot(self, channel: int) -> int:
-        """Index of the given channel's coefficient block in the parameter list."""
         if channel == 0:
-            return 1
-        return 1 + int(self.port_present)
+            return self.port_slot
+        return self.stbd_slot
 
     def Evaluate(self, parameters, residuals, jacobians) -> bool:
-        start, end = self.start, self.start + self.size
+        beam_params = list(parameters[: -1])
+        alpha_val = parameters[-1][0]
 
-        reflectivity = parameters[0][0]
-        alpha = parameters[-1][0]
+        # Slice the observation arrays for this vertex
+        I = self.obs_intensity[self.start:self.end]
+        cos_theta = self.obs_cos_incidence[self.start:self.end]
+        r = self.obs_range[self.start:self.end]
+        u = self.obs_pattern_angle[self.start:self.end]
+        channels = self.obs_channel[self.start:self.end]
 
-        # Lambertian scattering factor from the known incidence angle
-        scatter = self.bases[1][start:end]
-        # Loss factor starts at 1.0 by definition (0 dB at zero range)
-        loss = 10.0 ** (-2.0 * alpha * self.bases[2][start:end] / 10.0)
+        n_obs = self.end - self.start
 
-        u = self.bases[3][start:end]
-        channels = self.bases[4][start:end]
+        # Lambertian + propagation loss: W_k = cos(theta_k) * exp(-ALPHA_JAC * alpha * r_k)
+        W = cos_theta * np.exp(-ALPHA_JAC * alpha_val * r)
 
+        # Evaluate Chebyshev basis once for all observations of this vertex
         T = chebyshev_basis(u, self.degree)
 
-        # Beam gains: log-gain is the pattern polynomial per channel
-        log_gain = np.zeros(self.size, dtype=np.float64)
-        for channel, present in ((0, self.port_present), (1, self.stbd_present)):
-            if not present:
-                continue
+        # Accumulate per-vertex statistics
+        sum_I2 = 0.0
+        sum_IW = 0.0
+        sum_W2 = 0.0
 
-            coefficients = np.asarray(parameters[self._channel_slot(channel)], dtype=np.float64)
-            mask = channels == channel
-            if np.any(mask):
-                log_gain[mask] = T[mask] @ coefficients
-        gain = np.exp(log_gain)
+        # Pre-allocate arrays for Jacobian computation if needed
+        if jacobians is not None:
+            d_sum_IW_dalpha = 0.0
+            d_sum_W2_dalpha = 0.0
+            d_sum_IW_dbeam_port = np.zeros(self.degree + 1, dtype=np.float64)
+            d_sum_W2_dbeam_port = np.zeros(self.degree + 1, dtype=np.float64)
+            d_sum_IW_dbeam_stbd = np.zeros(self.degree + 1, dtype=np.float64)
+            d_sum_W2_dbeam_stbd = np.zeros(self.degree + 1, dtype=np.float64)
 
-        predicted = reflectivity * scatter * gain * loss
+        # Process each observation
+        for local_idx in range(n_obs):
+            channel = int(channels[local_idx])
+            coeffs = beam_params[self._channel_slot(channel)]
 
-        res = self.bases[0][start:end] - predicted
-        try:
-            residuals[:] = res
-        except TypeError:
-            for i in range(len(res)):
-                residuals[i] = res[i]
+            # Beam gain in log space: log_G = T[local_idx] @ coeffs
+            G = np.exp(T[local_idx] @ coeffs)
+
+            # Full weight: W_k * G
+            WG = W[local_idx] * G
+
+            sum_I2 += I[local_idx] ** 2
+            sum_IW += I[local_idx] * WG
+            sum_W2 += WG ** 2
+
+            if jacobians is not None:
+                # Derivative of WG w.r.t. alpha:
+                # dW/dalpha = -ALPHA_JAC * r * W
+                # dWG/dalpha = -ALPHA_JAC * r * WG
+                dWG_dalpha = -ALPHA_JAC * r[local_idx] * WG
+                d_sum_IW_dalpha += I[local_idx] * dWG_dalpha
+                d_sum_W2_dalpha += 2 * WG * dWG_dalpha
+
+                # Derivative of WG w.r.t. beam coefficients:
+                # dG/dcoeffs[k] = G * T[local_idx, k]
+                # dWG/dcoeffs[k] = W * dG/dcoeffs[k] = WG * T[local_idx, k]
+                dWG_dbeam = WG * T[local_idx, :]
+                if channel == 0:
+                    d_sum_IW_dbeam_port += I[local_idx] * dWG_dbeam
+                    d_sum_W2_dbeam_port += 2 * WG * dWG_dbeam
+                else:
+                    d_sum_IW_dbeam_stbd += I[local_idx] * dWG_dbeam
+                    d_sum_W2_dbeam_stbd += 2 * WG * dWG_dbeam
+
+        # Compute minimized cost residual
+        if sum_W2 < 1e-30:
+            residual = np.sqrt(sum_I2)  # Fallback: all observations zero
+        else:
+            residual = np.sqrt(sum_I2 - sum_IW ** 2 / sum_W2)
+
+        residuals[0] = residual
 
         if jacobians is not None:
-            # d res / d R = -cos(theta) * G * L
-            if jacobians[0] is not None:
-                jacobians[0][:] = -scatter * gain * loss
+            # Jacobian of residual w.r.t. parameters
+            # residual = sqrt(sum_I2 - sum_IW^2 / sum_W2)
+            # f = sum_I2 - sum_IW^2 / sum_W2
+            # df/dp = -2*sum_IW*d(sum_IW)/dp/sum_W2 + sum_IW^2*d(sum_W2)/dp/sum_W2^2
+            #       = (sum_IW/sum_W2) * (d(sum_W2)/dp/sum_W2 - 2*d(sum_IW)/dp/sum_IW)
 
-            # d res_i / d c_k = -predicted_i * T_k(u_i), rows of the other
-            # channel stay zero. Ceres stores per-block jacobians row-major:
-            # entry [i * block_size + k].
+            if sum_W2 < 1e-30 or residual < 1e-30:
+                for jb in jacobians:
+                    if jb is not None:
+                        jb[:] = 0.0
+                return True
+
+            ratio = sum_IW / sum_W2
+            inv_res = 1.0 / (2.0 * residual)
+
+            # Process beam parameter blocks
+            slot = 0
             for channel, present in ((0, self.port_present), (1, self.stbd_present)):
                 if not present:
                     continue
-                slot = self._channel_slot(channel)
                 jb = jacobians[slot]
-                if jb is None:
-                    continue
-                mask = channels == channel
-                block = np.zeros((self.size, self.degree + 1), dtype=np.float64)
-                if np.any(mask):
-                    block[mask, :] = -predicted[mask, None] * T[mask, :]
-                jb[:] = block.ravel()
-                del block
+                if jb is not None:
+                    if channel == 0:
+                        d_sum_IW = d_sum_IW_dbeam_port
+                        d_sum_W2 = d_sum_W2_dbeam_port
+                    else:
+                        d_sum_IW = d_sum_IW_dbeam_stbd
+                        d_sum_W2 = d_sum_W2_dbeam_stbd
+                    df_dbeam = ratio * (d_sum_W2 / sum_W2 - 2.0 * d_sum_IW / (sum_IW + 1e-30))
+                    jb[:] = inv_res * df_dbeam
+                slot += 1
 
-            # d res / d alpha = (2 * ln(10) / 10) * r * predicted
-            if jacobians[-1] is not None:
-                jacobians[-1][:] = ALPHA_JAC * self.bases[2][start:end] * predicted
+            # Alpha parameter block
+            jb_alpha = jacobians[-1]
+            if jb_alpha is not None:
+                df_dalpha = ratio * (d_sum_W2_dalpha / sum_W2 - 2.0 * d_sum_IW_dalpha / (sum_IW + 1e-30))
+                jb_alpha[0] = inv_res * df_dalpha
+
         return True
 
 
@@ -192,20 +260,23 @@ class BundleAdjustment:
     G_channel is a degree-'beam_degree' Chebyshev polynomial in log space
     (2 * (degree + 1) global coefficients in total).
 
-    Problem structure (scales to hundreds of millions of observations):
-      - One residual block per vertex holding all of its observations.
-      - The beam pattern is parametric, so each residual block references at
-        most three global blocks: one coefficient vector per channel observed
-        plus the absorption scalar.
-      - Per-vertex reflectivity values live in one contiguous buffer; each
-        ceres parameter block is a view into it.
-      - solve() reorders the observation arrays by vertex in place, so after
-        solving the obs_* attributes are in vertex-sorted order (their contents
-        are unchanged and every downstream use is order independent). Only the
-        arrays the decomposition stage needs are kept afterwards.
+    Optimization structure:
+      - Vertex reflectivity is analytically eliminated: given fixed beam and alpha,
+        the optimal R_v for each vertex is a closed-form weighted average.
+      - Only 3 global parameter blocks are optimized: port beam coefficients,
+        starboard beam coefficients, and the absorption scalar (total 15 or
+        2*degree+3 parameters).
+      - One residual block per vertex, returning the minimized cost after
+        eliminating R_v (scalar). This keeps the Jacobian tiny: ~15 entries
+        per vertex, independent of the number of observations.
+      - Memory usage scales linearly with the number of observations, and the
+        solver memory scales only with the 15 global parameters. Each VertexCost
+        instance holds only indices and references to the global observation
+        arrays; no observation data is copied.
     """
 
-    def __init__(self,
+    def __init__(
+        self,
         dataset: Dataset,
         beam_degree: int = 6,
         max_angle: float = np.pi / 2,
@@ -324,39 +395,6 @@ class BundleAdjustment:
         if self.verbose:
             print(f"Loaded {count} vertex observations")
 
-    def initial_reflectivity(self,
-        vertex_ids: np.ndarray,
-        group_starts: np.ndarray,
-        group_ends: np.ndarray,
-    ) -> np.ndarray:
-        """
-        Reflectivity solved using the initial global parameters
-        (G = 1, alpha = absorption_coeff) with the Lambertian factor divided out:
-
-            R_v = mean over observations of I * 10^(2 * alpha_init * r / 10) / cos(theta)
-
-        Must be called with the vertex-sorted observation arrays (solve Phase A)
-        so per-vertex means reduce to contiguous segments. Near-grazing
-        observations (cos(theta) -> 0) carry almost no signal about reflectivity,
-        so the divisor is floored to avoid exploding the initialization.
-        """
-        compensation = 10.0 ** (2.0 * self.absorption_coeff * self.obs_range / 10.0)
-        weighted = self.obs_intensity * compensation
-        del compensation
-
-        # Floor the Lambertian divisor: grazing hits have no signal to divide
-        weighted /= np.clip(self.obs_cos_incidence, 1.0e-3, 1.0)
-
-        sums = np.add.reduceat(weighted, group_starts)
-        del weighted
-        gc.collect()
-
-        reflectivity = np.zeros(int(vertex_ids.max()) + 1, dtype=np.float64)
-        reflectivity[vertex_ids] = sums / (group_ends - group_starts)
-        del sums
-
-        return reflectivity
-
     def solve(self):
         """
         Builds and solves the bundle adjustment problem.
@@ -400,6 +438,8 @@ class BundleAdjustment:
         self.obs_pattern_angle = self.obs_pattern_angle[order]
         self.obs_range = self.obs_range[order]
         self.obs_channel = self.obs_channel[order]
+        self.obs_ping_idx = self.obs_ping_idx[order]
+        self.obs_bin_idx = self.obs_bin_idx[order]
         del order
         gc.collect()
 
@@ -414,46 +454,32 @@ class BundleAdjustment:
         group_ends = np.append(group_starts[1:], self.obs_vertex.size)
         gc.collect()
 
-        # --- Phase C: initial reflectivity from the grouped observations ---
-        init_reflectivity = self.initial_reflectivity(vertex_ids, group_starts, group_ends)
-
-        # --- Phase D: build one residual block per vertex ---
-        # Per-vertex reflectivity values live in a single contiguous buffer;
-        # each ceres parameter block is a view into it.
-        rv_buffer = init_reflectivity[vertex_ids]
-        del init_reflectivity
-
-        bases = (
-            self.obs_intensity,
-            self.obs_cos_incidence,
-            self.obs_range,
-            self.obs_pattern_angle,
-            self.obs_channel,
-        )
-
+        # --- Phase C: build one residual block per vertex ---
+        # Each vertex contributes one scalar residual (the minimized cost after
+        # analytically eliminating R_v). Parameter blocks are only the global
+        # beam and alpha blocks (3 total). Each cost function holds only
+        # references to the global observation arrays plus start/end indices.
         n_port = n_stbd = 0
         for i, (start, end) in enumerate(zip(group_starts, group_ends)):
-            # Loop temporaries (rv_block, ...) are rebound each iteration;
-            # CPython's reference counting frees the previous iteration's
-            # objects immediately.
-            rv_block = rv_buffer[i:i + 1]
-            problem.add_parameter_block(rv_block, 1)
-            problem.set_parameter_lower_bound(rv_block, 0, 0.0)
-
             channels = self.obs_channel[start:end]
             port_present = bool(np.any(channels == 0))
             stbd_present = bool(np.any(channels == 1))
             n_port += port_present
             n_stbd += stbd_present
 
-            cost = VertexObservationCost(
-                bases, start, end - start, self.beam_degree,
-                port_present, stbd_present,
+            cost = VertexCost(
+                start, end,
+                self.obs_intensity,
+                self.obs_cos_incidence,
+                self.obs_range,
+                self.obs_pattern_angle,
+                self.obs_channel,
+                self.beam_degree,
+                port_present,
+                stbd_present,
             )
 
-            # Ceres applies the loss to the squared norm of the whole residual
-            # block: scale delta by sqrt(m) to keep the configured
-            # per-observation robustness after batching.
+            # Build parameter block list based on which channels are present
             beam_blocks = []
             if port_present:
                 beam_blocks.append(beam_port_coeffs)
@@ -462,11 +488,10 @@ class BundleAdjustment:
 
             problem.add_residual_block(
                 cost,
-                pyceres.HuberLoss(self.loss_delta * math.sqrt(end - start)),
-                [rv_block, *beam_blocks, alpha],
+                pyceres.HuberLoss(self.loss_delta),
+                [*beam_blocks, alpha],
             )
 
-        del bases
         gc.collect()
 
         if self.verbose:
@@ -474,9 +499,9 @@ class BundleAdjustment:
                   f"({n_port} referencing port, {n_stbd} starboard), "
                   f"patterns of degree {self.beam_degree}")
 
-        # --- Phase E: solve ---
+        # --- Phase D: solve ---
         options = pyceres.SolverOptions()
-        options.linear_solver_type = pyceres.LinearSolverType.SPARSE_SCHUR
+        options.linear_solver_type = pyceres.LinearSolverType.DENSE_SCHUR
         options.max_num_iterations = self.max_iterations
         options.num_threads = self.num_threads
         options.minimizer_progress_to_stdout = self.verbose
@@ -488,24 +513,51 @@ class BundleAdjustment:
             print(summary.BriefReport())
             print(f"Solve finished")
 
-        # --- Phase F: collect results and release everything heavy ---
+        # --- Phase E: compute final reflectivity values ---
+        # With optimized beam and alpha, compute R_v* = Σ I_k W_k / Σ W_k^2 for each vertex
         reflectivity = np.zeros(int(self.obs_vertex[-1]) + 1, dtype=np.float64)
-        reflectivity[vertex_ids] = rv_buffer
+
+        for i, (start, end) in enumerate(zip(group_starts, group_ends)):
+            vid = int(self.obs_vertex[start])
+            I = self.obs_intensity[start:end]
+            cos_theta = self.obs_cos_incidence[start:end]
+            r = self.obs_range[start:end]
+            u = self.obs_pattern_angle[start:end]
+            channels = self.obs_channel[start:end]
+
+            # Compute W_k = cos(theta_k) * exp(-ALPHA_JAC * alpha * r_k)
+            W = cos_theta * np.exp(-ALPHA_JAC * alpha[0] * r)
+
+            # Evaluate beam gains
+            T = chebyshev_basis(u, self.beam_degree)
+            sum_IW = 0.0
+            sum_W2 = 0.0
+
+            for local_idx in range(end - start):
+                channel = int(channels[local_idx])
+                coeffs = beam_port_coeffs if channel == 0 else beam_stbd_coeffs
+                log_G = T[local_idx] @ coeffs
+                G = np.exp(log_G)
+                WG = W[local_idx] * G
+                sum_IW += I[local_idx] * WG
+                sum_W2 += WG ** 2
+
+            if sum_W2 > 1e-30:
+                reflectivity[vid] = sum_IW / sum_W2
+            else:
+                reflectivity[vid] = 0.0
+
+        # Release solver structures
+        del problem, group_starts, group_ends, vertex_ids
+        gc.collect()
+
+        if self.verbose:
+            print(f"Collected results")
 
         # The beam pattern is its coefficient vector: gains at any angle are
         # exp(chebyshev_basis(u, beam_degree) @ coefficients)
         beam_port = beam_port_coeffs.copy()
         beam_stbd = beam_stbd_coeffs.copy()
         absorption = float(alpha[0])
-
-        # Release the solver with its per-block structures, then the observation
-        # columns the decomposition stage does not need (intensity and cosine are
-        # solver inputs only; ping, bin, range, and vertex are kept).
-        del problem, rv_buffer, beam_port_coeffs, beam_stbd_coeffs
-        del self.obs_intensity, self.obs_cos_incidence, self.obs_pattern_angle, self.obs_channel
-        gc.collect()
-
-        if self.verbose:
-            print(f"Collected results")
 
         return reflectivity, beam_port, beam_stbd, absorption, summary
