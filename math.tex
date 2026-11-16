@@ -1,0 +1,151 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm}
+\usepackage{xcolor}
+
+\title{Bundle Adjustment for Reflectivity Mapping with Lambertian Model}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Observation Model}
+
+Each sonar observation of a mesh vertex $v$ at ping/range $(ping, bin)$ is modeled as:
+
+\begin{equation*}
+I_k = R_v \cdot \cos\theta_k \cdot G_c(\theta_k; \bm{\beta}_c) \cdot L(\alpha, r_k)
+\end{equation*}
+
+where:
+\begin{itemize}
+    \item $I_k$ is the raw waterfall intensity at the $k$-th observation of vertex $v$
+    \item $R_v \in \mathbb{R}$ is the reflectivity of vertex $v$ (local parameter; in practice $R_v > 0$)
+    \item $\theta_k$ is the \textbf{incidence angle} (angle from the surface normal) for observation $k$; \textbf{NOTE:} $\theta_k = 0$ is nadir, $\theta_k \to \pi/2$ is grazing
+    \item $c \in \{port, starboard\}$ is the sonar channel
+    \item $G_c(\theta_k; \bm{\beta}_c)$ is the beam pattern gain for channel $c$ at angle $\theta_k$
+    \item $L(\alpha, r_k) = \exp\left(-\frac{2\ln 10}{10} \cdot \alpha \cdot r_k\right)$ is the two-way propagation loss
+    \item $\alpha \in \mathbb{R}^+$ is the absorption coefficient (global parameter, in dB/m)
+    \item $r_k$ is the slant range for observation $k$
+    \item $\bm{\beta}_c \in \mathbb{R}^{d+1}$ are the Chebyshev polynomial coefficients for channel $c$ (global parameters)
+\end{itemize}
+
+\section{Beam Pattern Parameterization}
+
+The beam pattern for channel $c$ is parameterized using a Chebyshev polynomial in log-space:
+
+\begin{equation*}
+G_c(\theta; \bm{\beta}_c) = \exp\left(\sum_{i=0}^{d} \beta_{c,i} \cdot T_i(u(\theta))\right)
+\end{equation*}
+
+where:
+\begin{itemize}
+    \item $d$ is the polynomial degree (e.g., $d = 6$)
+    \item $T_i(u)$ is the $i$-th Chebyshev polynomial of the first kind
+    \item $u(\theta) = 2 \cdot \frac{\theta}{\theta_{\text{max}}} - 1 \in [-1, 1]$ is the normalized angle, with $\theta_{\text{max}} = \frac{\pi}{2}$
+\end{itemize}
+
+The Chebyshev polynomials are defined recursively:
+\begin{align*}
+T_0(u) &= 1 \
+T_1(u) &= u \
+T_i(u) &= 2u \cdot T_{i-1}(u) - T_{i-2}(u) \quad \text{for } i \geq 2
+\end{align*}
+
+For $u \in [-1, 1]$, we have $|T_i(u)| \leq 1$ for all $i$.
+
+\section{Optimization Problem}
+
+Given $N_v$ vertices, each with $K_v$ observations, we minimize:
+
+\begin{equation*}
+\min_{\bm{\beta}_\text{port}, \bm{\beta}_\text{stbd}, \alpha} \sum_{v=1}^{N_v} \min_{R_v} \sum_{k=1}^{K_v} \left[I_{v,k} - R_v \cdot \cos\theta_{v,k} \cdot G_{c_k}(\theta_{v,k}) \cdot L(\alpha, r_{v,k})\right]^2
+\end{equation*}
+
+Define the weight for observation $k$ of vertex $v$:
+\begin{equation*}
+W_{v,k} = \cos\theta_{v,k} \cdot G_{c_k}(\theta_{v,k}; \bm{\beta}_{c_k}) \cdot L(\alpha, r_{v,k})
+\end{equation*}
+
+Then the observation model is simply $I_{v,k} = R_v \cdot W_{v,k}$.
+
+\section{Analytical Elimination of $R_v$}
+
+For each vertex $v$, the optimal reflectivity that minimizes its sum of squared errors is:
+
+\begin{align*}
+R_v^* &= \arg\min_{R_v} \sum_{k=1}^{K_v} \left[I_{v,k} - R_v \cdot W_{v,k}\right]^2 \\
+&= \frac{\sum\limits_{k=1}^{K_v} I_{v,k} \cdot W_{v,k}}{\sum\limits_{k=1}^{K_v} W_{v,k}^2}
+\end{align*}
+
+Note: $R_v^*$ can be negative if the observations are inconsistent; in practice one may want to clamp $R_v^* \geq 0$.
+
+\section{Minimized Cost per Vertex}
+
+After substituting $R_v^*$, the minimized cost for vertex $v$ is:
+
+\begin{align*}
+C_v^* &= \sum_{k=1}^{K_v} \left[I_{v,k} - R_v^* \cdot W_{v,k}\right]^2 \\
+&= \sum_{k=1}^{K_v} I_{v,k}^2 - \frac{\left(\sum\limits_{k=1}^{K_v} I_{v,k} \cdot W_{v,k}\right)^2}{\sum\limits_{k=1}^{K_v} W_{v,k}^2}
+\end{align*}
+
+By the Cauchy-Schwarz inequality:
+\begin{equation*}
+\left(\sum_{k=1}^{K_v} I_{v,k} \cdot W_{v,k}\right)^2 \leq \left(\sum_{k=1}^{K_v} I_{v,k}^2\right) \left(\sum_{k=1}^{K_v} W_{v,k}^2\right)
+\end{equation*}
+
+Therefore $C_v^* \geq 0$. However, due to floating-point precision, the computed value can be slightly negative when $C_v^*$ is near zero, so we clamp:
+\begin{equation*}
+\text{residual}_v = \sqrt{\max\left(0, \sum_{k=1}^{K_v} I_{v,k}^2 - \frac{\left(\sum\limits_{k=1}^{K_v} I_{v,k} \cdot W_{v,k}\right)^2}{\sum\limits_{k=1}^{K_v} W_{v,k}^2}\right)\right}
+\end{equation*}
+
+\section{Gauge Fixing}
+
+The model has a scale ambiguity: multiplying all $R_v$ by a constant $s > 0$ and dividing all $G_c$ by $s$ leaves all observations unchanged. To fix this gauge approximately, we add a quadratic prior on the constant Chebyshev coefficient for each channel:
+
+\begin{equation*}
+\text{prior}_c(\bm{\beta}_c) = w_{\text{gauge}} \cdot (\beta_{c,0})^2
+\end{equation*}
+
+where $w_{\text{gauge}}$ controls the strength of the prior. Setting $w_{\text{gauge}}$ large drives $\beta_{c,0} \to 0$, which pins the beam pattern gain to be centered around 1 (since $G_c(\theta) = \exp(\beta_{c,0} + \dots)$ and $\beta_{c,0} = 0$ gives a multiplicative factor of 1).
+
+\section{Jacobian Computation}
+
+The residual for vertex $v$ is:
+\begin{equation*}
+\text{residual}_v = \sqrt{f_v} \quad \text{where} \quad f_v = \sum_{k=1}^{K_v} I_{v,k}^2 - \frac{\left(\sum\limits_{k=1}^{K_v} I_{v,k} \cdot W_{v,k}\right)^2}{\sum\limits_{k=1}^{K_v} W_{v,k}^2}
+\end{equation*}
+
+\subsection{Derivatives of $W_{v,k}$ with respect to parameters}
+
+For beam coefficients $\beta_{c,j}$ (only affects observations where $c_k = c$):
+\begin{align*}
+\frac{\partial W_{v,k}}{\partial \beta_{c,j}} &= \cos\theta_{v,k} \cdot L(\alpha, r_{v,k}) \cdot \frac{\partial G_c}{\partial \beta_{c,j}} \\
+&= \cos\theta_{v,k} \cdot L(\alpha, r_{v,k}) \cdot G_c(\theta_{v,k}) \cdot T_j(u(\theta_{v,k})) \\
+&= W_{v,k} \cdot T_j(u(\theta_{v,k})) \cdot \mathbb{1}[c_k = c]
+\end{align*}
+
+For absorption coefficient $\alpha$:
+\begin{align*}
+\frac{\partial W_{v,k}}{\partial \alpha} &= \cos\theta_{v,k} \cdot G_c(\theta_{v,k}) \cdot \frac{\partial L}{\partial \alpha} \\
+&= \cos\theta_{v,k} \cdot G_c(\theta_{v,k}) \cdot \left(-\frac{2\ln 10}{10} \cdot r_{v,k}\right) \cdot L(\alpha, r_{v,k}) \\
+&= -\frac{2\ln 10}{10} \cdot r_{v,k} \cdot W_{v,k}
+\end{align*}
+
+\subsection{Derivatives of $f_v$ and residual with respect to parameters}
+
+For any parameter $p \in \{\bm{\beta}_\text{port}, \bm{\beta}_\text{stbd}, \alpha\}$:
+
+\begin{align*}
+\frac{\partial f_v}{\partial p} &= -2 R_v^* \sum_{k=1}^{K_v} \left(I_{v,k} - R_v^* W_{v,k}\right) \frac{\partial W_{v,k}}{\partial p} \\
+\frac{\partial \text{residual}_v}{\partial p} &= \frac{1}{2 \, \text{residual}_v} \, \frac{\partial f_v}{\partial p} \quad \text{(set to 0 when } \text{residual}_v = 0\text{)}
+\end{align*}
+
+\textbf{Note on singularity:} When $f_v = 0$ (e.g., a vertex with a single observation fits perfectly), $\frac{\partial \text{residual}_v}{\partial p}$ is undefined. In this case the gradient contribution is zero.
+
+\end{document}

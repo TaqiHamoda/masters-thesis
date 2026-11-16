@@ -9,8 +9,14 @@ from typing import Dict, List, Tuple
 
 from .dataset import Dataset
 
-# Two-way absorption loss (20-log rule on voltage samples): 10^(-2 * alpha * r / 10)
-# Its alpha derivative contributes (2 * ln(10) / 10) * r * loss per unit alpha
+# Two-way propagation loss.
+# For VOLTAGE/amplitude samples with absorption alpha in dB/m:
+#   linear_loss = 10^(-2 * alpha * r / 20) = exp(-alpha * r * ln(10) / 10)
+# For POWER/intensity samples:
+#   linear_loss = 10^(-2 * alpha * r / 10) = exp(-2 * alpha * r * ln(10) / 10)
+# This code uses the POWER convention (ALPHA_JAC = 2*ln(10)/10) so the returned
+# absorption coefficient is in dB/m for POWER samples. If your waterfall data
+# is VOLTAGE, divide the returned alpha by 2 to get the correct dB/m value.
 ALPHA_JAC = 2.0 * np.log(10.0) / 10.0
 
 
@@ -110,123 +116,86 @@ class VertexCost(pyceres.CostFunction):
 
         n_obs = self.end - self.start
 
-        # Lambertian + propagation loss: W_k = cos(theta_k) * exp(-ALPHA_JAC * alpha * r_k)
-        W = cos_theta * np.exp(-ALPHA_JAC * alpha_val * r)
+        # Evaluate Chebyshev basis once for all observations
+        T_basis = chebyshev_basis(u, self.degree)
 
-        # Evaluate Chebyshev basis once for all observations of this vertex
-        T = chebyshev_basis(u, self.degree)
-
-        # Accumulate per-vertex statistics
-        sum_I2 = 0.0
-        sum_IW = 0.0
+        # Precompute WG for all observations
+        WG = np.empty(n_obs, dtype=np.float64)
         sum_W2 = 0.0
 
-        # Pre-allocate arrays for Jacobian computation if needed
-        if jacobians is not None:
-            d_sum_IW_dalpha = 0.0
-            d_sum_W2_dalpha = 0.0
-            d_sum_IW_dbeam_port = np.zeros(self.degree + 1, dtype=np.float64)
-            d_sum_W2_dbeam_port = np.zeros(self.degree + 1, dtype=np.float64)
-            d_sum_IW_dbeam_stbd = np.zeros(self.degree + 1, dtype=np.float64)
-            d_sum_W2_dbeam_stbd = np.zeros(self.degree + 1, dtype=np.float64)
-
-        # Process each observation
         for local_idx in range(n_obs):
             channel = int(channels[local_idx])
             coeffs = beam_params[self._channel_slot(channel)]
-
-            # Beam gain in log space: log_G = T[local_idx] @ coeffs
-            log_G = T[local_idx] @ coeffs
-            # Clamp to prevent overflow/underflow in exp: keep |log_G| <= 10
+            log_G = T_basis[local_idx] @ coeffs
             G = np.exp(np.clip(log_G, -10.0, 10.0))
+            WG_val = cos_theta[local_idx] * np.exp(-ALPHA_JAC * alpha_val * r[local_idx]) * G
+            WG[local_idx] = WG_val
+            sum_W2 += WG_val ** 2
 
-            # Full weight: W_k * G
-            WG = W[local_idx] * G
-
-            # Accumulate sums carefully to avoid overflow
-            sum_I2 += I[local_idx] ** 2
-            sum_IW += I[local_idx] * WG
-            sum_W2 += WG ** 2
-
-            if jacobians is not None:
-                # Derivative of WG w.r.t. alpha:
-                # dW/dalpha = -ALPHA_JAC * r * W
-                # dWG/dalpha = -ALPHA_JAC * r * WG
-                dWG_dalpha = -ALPHA_JAC * r[local_idx] * WG
-                d_sum_IW_dalpha += I[local_idx] * dWG_dalpha
-                d_sum_W2_dalpha += 2 * WG * dWG_dalpha
-
-                # Derivative of WG w.r.t. beam coefficients:
-                # dG/dcoeffs[k] = G * T[local_idx, k]
-                # dWG/dcoeffs[k] = W * dG/dcoeffs[k] = WG * T[local_idx, k]
-                dWG_dbeam = WG * T[local_idx, :]
-                if channel == 0:
-                    d_sum_IW_dbeam_port += I[local_idx] * dWG_dbeam
-                    d_sum_W2_dbeam_port += 2 * WG * dWG_dbeam
-                else:
-                    d_sum_IW_dbeam_stbd += I[local_idx] * dWG_dbeam
-                    d_sum_W2_dbeam_stbd += 2 * WG * dWG_dbeam
-
-        # Compute minimized cost residual
-        # Clamp to avoid sqrt(negative) from numerical instability when sum_W2 is tiny
+        # Guard: skip vertex if all weights are near-zero (grazing angles or far range)
         if sum_W2 < 1e-15:
-            # All WG effectively zero: residual = sqrt(sum I_k^2)
-            residual = np.sqrt(sum_I2) if sum_I2 >= 0 else 0.0
-        else:
-            residual_value = sum_I2 - sum_IW ** 2 / sum_W2
-            residual = np.sqrt(max(0.0, residual_value))
+            residuals[0] = np.linalg.norm(I)  # sqrt(sum I_k^2)
+            if jacobians is not None:
+                for jb in jacobians:
+                    if jb is not None:
+                        jb[:] = 0.0
+            return True
 
+        # Optimal reflectivity and per-observation errors
+        R_v_star = np.dot(I, WG) / sum_W2
+        errors = I - R_v_star * WG
+
+        # Residual: sqrt(sum of squared errors) -- numerically stable
+        residual = np.linalg.norm(errors)
         residuals[0] = residual
 
-        # If we clamped a negative residual_value to zero, the vertex contributes
-        # no signal to the optimization, so zero out its Jacobian entirely.
-        if residual == 0.0 and sum_W2 >= 1e-15:
-            # residual_value was negative and got clamped to 0
-            if jacobians is not None:
-                for jb in jacobians:
-                    if jb is not None:
-                        jb[:] = 0.0
-                return True
+        if jacobians is None:
+            return True
 
-        if jacobians is not None:
-            # Jacobian of residual w.r.t. parameters
-            # residual = sqrt(sum_I2 - sum_IW^2 / sum_W2)
-            # f = sum_I2 - sum_IW^2 / sum_W2
-            # df/dp = -2*sum_IW*d(sum_IW)/dp/sum_W2 + sum_IW^2*d(sum_W2)/dp/sum_W2^2
-            #       = (sum_IW/sum_W2) * (d(sum_W2)/dp/sum_W2 - 2*d(sum_IW)/dp/sum_IW)
-
-            if sum_W2 < 1e-15 or residual < 1e-15:
-                # Degenerate case (near-zero weights or residual): zero out Jacobian
-                for jb in jacobians:
-                    if jb is not None:
-                        jb[:] = 0.0
-                return True
-
-            ratio = sum_IW / sum_W2
-            inv_res = 1.0 / (2.0 * residual)
-
-            # Process beam parameter blocks
-            slot = 0
-            for channel, present in ((0, self.port_present), (1, self.stbd_present)):
-                if not present:
-                    continue
-                jb = jacobians[slot]
+        # Guard: zero gradient when residual is zero (perfect fit)
+        if residual < 1e-15:
+            for jb in jacobians:
                 if jb is not None:
-                    if channel == 0:
-                        d_sum_IW = d_sum_IW_dbeam_port
-                        d_sum_W2 = d_sum_W2_dbeam_port
-                    else:
-                        d_sum_IW = d_sum_IW_dbeam_stbd
-                        d_sum_W2 = d_sum_W2_dbeam_stbd
-                    df_dbeam = ratio * (d_sum_W2 / sum_W2 - 2.0 * d_sum_IW / (sum_IW + 1e-30))
-                    jb[:] = inv_res * df_dbeam
-                slot += 1
+                    jb[:] = 0.0
+            return True
 
-            # Alpha parameter block
-            jb_alpha = jacobians[-1]
-            if jb_alpha is not None:
-                df_dalpha = ratio * (d_sum_W2_dalpha / sum_W2 - 2.0 * d_sum_IW_dalpha / (sum_IW + 1e-30))
-                jb_alpha[0] = inv_res * df_dalpha
+        # Jacobians using verified envelope theorem formula:
+        # \partial residual / \partial p = (1 / (2 * residual)) * \partial f / \partial p
+        # where f = sum_k errors_k^2
+        # \partial f / \partial p = -2 * R_v* * sum_k errors_k * \partial W_k / \partial p
+        #
+        # \partial W_k / \partial \beta_{c,j} = W_k * T_j(u_k)  for observations of channel c
+        # \partial W_k / \partial \alpha      = -ALPHA_JAC * r_k * W_k
+
+        inv_two_res = 1.0 / (2.0 * residual)
+        factor = -2.0 * R_v_star * inv_two_res  # = -R_v* / residual
+
+        # Zero all Jacobian blocks first
+        for jb in jacobians:
+            if jb is not None:
+                jb[:] = 0.0
+
+        # Alpha parameter block (last block)
+        jb_alpha = jacobians[-1]
+        if jb_alpha is not None:
+            for local_idx in range(n_obs):
+                dW_dalpha = -ALPHA_JAC * r[local_idx] * WG[local_idx]
+                jb_alpha[0] += factor * errors[local_idx] * dW_dalpha
+
+        # Beam coefficient blocks
+        slot = 0
+        for channel, present in ((0, self.port_present), (1, self.stbd_present)):
+            if not present:
+                continue
+            jb = jacobians[slot]
+            if jb is not None:
+                for local_idx in range(n_obs):
+                    if channels[local_idx] != channel:
+                        continue
+                    # dWG/d\beta_j = WG * T_j(u)
+                    dWG_dbeta = WG[local_idx] * T_basis[local_idx, :]
+                    jb[:] += factor * errors[local_idx] * dWG_dbeta
+            slot += 1
 
         return True
 
@@ -236,10 +205,12 @@ class BeamPriorCost(pyceres.CostFunction):
     Anchors the global scale gauge between reflectivity and the beam pattern.
 
     The constant Chebyshev coefficient c_0 is the pattern's log-scale: the
-    observation model is invariant to (reflectivity -> R * s, c_0 -> c_0 + ln s),
-    so c_0 = 0 pins gain patterns (and reflectivity) to a fixed global scale.
+    observation model is invariant to (reflectivity -> R * s, G -> G / s),
+    which in log-space means (R -> R * s, c_0 -> c_0 - ln s). To fix the gauge,
+    we add a quadratic prior cost w * c_0^2, where w is gauge_weight^2.
 
-        res = c_0 * gauge_weight
+    The residual returned is gauge_weight * c_0, so the actual cost added is
+    (gauge_weight * c_0)^2 = gauge_weight^2 * c_0^2.
 
     Parameter blocks: [beam pattern coefficients (degree + 1,)]
     """
@@ -253,7 +224,9 @@ class BeamPriorCost(pyceres.CostFunction):
         self.gauge_weight = float(gauge_weight)
 
     def Evaluate(self, parameters, residuals, jacobians) -> bool:
-        residuals[0] = parameters[0][0] * self.gauge_weight
+        # residual = gauge_weight * c_0, so cost = (gauge_weight * c_0)^2
+        c0 = parameters[0][0]
+        residuals[0] = self.gauge_weight * c0
 
         if jacobians is not None and jacobians[0] is not None:
             jacobians[0][:] = 0.0
@@ -341,10 +314,18 @@ class BundleAdjustment:
         n_pings, n_bins = waterfall.shape
 
         # Ping index -> number of samples per channel (port | starboard split)
-        num_samples_map: Dict[int, int] = {
-            sss.ping_idx: sss.num_samples
-            for sss in self.dataset.sonar.values()
-        }
+        # Note: if port and starboard for the same ping have different ping_idx values,
+        # this works correctly. If they share ping_idx, only the last entry is kept.
+        # The channel is then determined by bin_idx < num_samples.
+        num_samples_map: Dict[int, int] = {}
+        for sss in self.dataset.sonar.values():
+            ping_idx = sss.ping_idx
+            if ping_idx in num_samples_map:
+                # Multiple entries for same ping_idx: keep the larger num_samples
+                # (assumes port and starboard are stored separately)
+                num_samples_map[ping_idx] = max(num_samples_map[ping_idx], sss.num_samples)
+            else:
+                num_samples_map[ping_idx] = sss.num_samples
 
         # Reserve the exact memory needed up front instead of growing Python lists
         upper = self._count_matches_rows(matches_files)
@@ -387,8 +368,12 @@ class BundleAdjustment:
                             distance <= 0):
                         continue
 
-                    # Half-open/current observation angles can graze the limits
-                    theta = min(max(incidence_angle, 0.0), self.max_angle)
+                    # Skip out-of-range incidence angles: these are back-facing or invalid
+                    # and would have W_k = cos(theta) * ... = 0, poisoning the residual
+                    if incidence_angle < 0.0 or incidence_angle > self.max_angle:
+                        continue
+
+                    theta = incidence_angle
 
                     obs_vertex[count] = vertex_idx
                     obs_channel[count] = 0 if bin_idx < num_samples else 1
@@ -541,7 +526,8 @@ class BundleAdjustment:
 
         # --- Phase D: solve ---
         options = pyceres.SolverOptions()
-        options.linear_solver_type = pyceres.LinearSolverType.DENSE_SCHUR
+        # Only 15 global parameters, no point/edge blocks: DENSE_QR is appropriate
+        options.linear_solver_type = pyceres.LinearSolverType.DENSE_QR
         options.max_num_iterations = self.max_iterations
         options.num_threads = self.num_threads
         options.minimizer_progress_to_stdout = self.verbose
@@ -555,6 +541,9 @@ class BundleAdjustment:
 
         # --- Phase E: compute final reflectivity values ---
         # With optimized beam and alpha, compute R_v* = Σ I_k W_k / Σ W_k^2 for each vertex
+        # Size by max observed vertex ID + 1. Vertices beyond this range or in gaps
+        # will be zero (unobserved). If you need reflectivity for all mesh vertices,
+        # the caller should pad this array to the mesh's vertex count.
         reflectivity = np.zeros(int(self.obs_vertex[-1]) + 1, dtype=np.float64)
 
         for i, (start, end) in enumerate(zip(group_starts, group_ends)):
@@ -577,7 +566,8 @@ class BundleAdjustment:
                 channel = int(channels[local_idx])
                 coeffs = beam_port_coeffs if channel == 0 else beam_stbd_coeffs
                 log_G = T[local_idx] @ coeffs
-                G = np.exp(log_G)
+                # Clamp to match the cost function's safety limit
+                G = np.exp(np.clip(log_G, -10.0, 10.0))
                 WG = W[local_idx] * G
                 sum_IW += I[local_idx] * WG
                 sum_W2 += WG ** 2
