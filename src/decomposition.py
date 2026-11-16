@@ -1,4 +1,4 @@
-import cv2
+import cv2, gc
 import numpy as np
 from scipy.interpolate import griddata
 
@@ -11,7 +11,7 @@ from typing import Tuple
 from tqdm import tqdm
 
 from .dataset import Dataset, VertexHit
-from .bundle_adjustment import BundleAdjustment, collect_garbage
+from .bundle_adjustment import BundleAdjustment
 
 
 def rasterize_texture(
@@ -191,7 +191,7 @@ class Decomposition:
         cfg = self.ba_cfg
         ba = BundleAdjustment(
             self.dataset,
-            ang_samples=cfg.get("ang_samples", 360),
+            beam_degree=cfg.get("beam_degree", 6),
             max_angle=cfg.get("max_angle", np.pi / 2),
             absorption_coeff=cfg.get("absorption_coeff", 0.1),
             max_iterations=cfg.get("max_iterations", 100),
@@ -202,6 +202,8 @@ class Decomposition:
         )
 
         reflectivity, beam_port, beam_stbd, absorption_coeff, summary = ba.solve()
+
+        print(f"Absorption Coeff: {absorption_coeff:.4f}\nPort Coeff: {beam_port:.4f}\nStbd Coeff: {beam_stbd:.4f}\n")
 
         np.savez_compressed(
             self.dataset.sonar_ba,
@@ -240,7 +242,7 @@ class Decomposition:
         # The bundle adjustment object (and its remaining observation arrays)
         # are no longer needed once the column statistics are computed
         del ba
-        collect_garbage()
+        gc.collect()
 
         reflectivity_map = np.full((rows, cols), np.nan, dtype=np.float32)
         hit_cells = counts > 0
@@ -254,7 +256,7 @@ class Decomposition:
         np.savez_compressed(self.dataset.sonar_loss, data=prop_loss)
         np.savez_compressed(self.dataset.sonar_reflectivity, data=reflectivity_map)
         del angles, is_valid, reflectivity_map, prop_loss
-        collect_garbage()
+        gc.collect()
 
     def print_stats(self) -> None:
         reflectivity = np.load(self.dataset.sonar_reflectivity)["data"]
