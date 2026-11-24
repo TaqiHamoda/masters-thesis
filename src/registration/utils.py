@@ -226,7 +226,25 @@ def get_incidence_angles(pose: Pose, points: np.ndarray, normals: np.ndarray, ep
     v_ned_unit = v_ned / (np.linalg.norm(v_ned, axis=1, keepdims=True) + eps)
     normals_unit = normals / (np.linalg.norm(normals, axis=1, keepdims=True) + eps)
 
-    cos_theta = np.sum(v_ned_unit * normals_unit, axis=1)
+    cos_theta = np.abs(np.sum(v_ned_unit * normals_unit, axis=1))
 
     # We only care about angles between 0 and pi/2
     return np.arccos(np.clip(cos_theta, 0.0, 1.0))
+
+
+def get_depression_angles(pose: Pose, points: np.ndarray) -> np.ndarray:
+    """
+    Parameters:
+        pose: AUV pose object
+        points: np.ndarray that is nx3
+
+    Returns:
+        np.ndarray: An nx1 numpy array where each element is the ray depression
+        angle below the body-horizontal in the fan plane (radians, positive
+        downward, starboard and port both positive).
+    """
+    v_body = get_in_body_frame(pose, points)
+
+    # Fan plane is body y-z (per get_intersections). Angle within the fan,
+    # measured down from the across-track horizontal.
+    return np.arctan2(v_body[:, 2], np.abs(v_body[:, 1]))

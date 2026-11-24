@@ -203,7 +203,7 @@ class Decomposition:
 
         reflectivity, beam_port, beam_stbd, absorption_coeff, summary = ba.solve()
 
-        print(f"Absorption Coeff: {absorption_coeff:.4f}\nPort Coeff: {beam_port:.4f}\nStbd Coeff: {beam_stbd:.4f}\n")
+        print(f"Absorption Coeff: {absorption_coeff:.4f}\nPort Coeff: {beam_port}\nStbd Coeff: {beam_stbd}\n")
 
         np.savez_compressed(
             self.dataset.sonar_ba,

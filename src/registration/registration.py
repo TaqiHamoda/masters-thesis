@@ -14,6 +14,7 @@ from .utils import (
     get_in_body_frame,
     get_corresponding_channels,
     get_incidence_angles,
+    get_depression_angles,
 )
 from ..dataset import Dataset, Pose, AcousticHit, ImageHit, VertexHit
 from ..photogrammetry import Photogrammetry
@@ -148,12 +149,13 @@ class Registration:
 
         distances = get_distances(pose, points - offsets)
         incidence_angles = get_incidence_angles(pose, points - offsets, normals)
+        depression_angles = get_depression_angles(pose, points - offsets)
 
         bins = sss.num_samples * distances / sss.slant_range
         bins = sss.num_samples + np.power(-1, 1 - channels) * bins
         bins = np.round(bins).astype(int)
 
-        return channels, local_offsets, offsets, distances, incidence_angles, bins
+        return channels, local_offsets, offsets, distances, incidence_angles, depression_angles, bins
 
     def get_hits(self, ts: int, points: np.ndarray, normals: np.ndarray) -> List[AcousticHit]:
         pose = self.sss_poses[ts]
@@ -164,6 +166,7 @@ class Registration:
         offsets,
         distances,
         incidence_angles,
+        depression_angles,
         bins) = self.get_geometry(ts, points, normals)
 
         return [
@@ -177,6 +180,7 @@ class Registration:
                 bin_idx=bins[i],
                 distance=distances[i],
                 incidence_angle=incidence_angles[i],
+                depression_angle=depression_angles[i],
                 offset_x=local_offsets[i, 0],
                 offset_y=local_offsets[i, 1],
                 offset_z=local_offsets[i, 2],

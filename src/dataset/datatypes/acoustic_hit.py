@@ -6,7 +6,7 @@ from .pose import Pose
 
 
 class AcousticHit(Datatype):
-    headers = Pose.headers + ["ping_idx", "bin_idx", "distance", "incidence_angle", "offset_x", "offset_y", "offset_z", "p_x", "p_y", "p_z"]
+    headers = Pose.headers + ["ping_idx", "bin_idx", "distance", "incidence_angle", "depression_angle", "offset_x", "offset_y", "offset_z", "p_x", "p_y", "p_z"]
 
     def __init__(self,
         pose: Pose,
@@ -14,6 +14,7 @@ class AcousticHit(Datatype):
         bin_idx: int,
         distance: float,
         incidence_angle: float,
+        depression_angle: float,
         offset_x: float,
         offset_y: float,
         offset_z: float,
@@ -26,6 +27,7 @@ class AcousticHit(Datatype):
         self.bin_idx = bin_idx
         self.distance = distance
         self.incidence_angle = incidence_angle
+        self.depression_angle = depression_angle
         self.offset_x = offset_x
         self.offset_y = offset_y
         self.offset_z = offset_z
@@ -44,6 +46,7 @@ class AcousticHit(Datatype):
             bin_idx=int(data["bin_idx"]),
             distance=float(data["distance"]),
             incidence_angle=float(data["incidence_angle"]),
+            depression_angle=float(data["depression_angle"]),
             offset_x=float(data["offset_x"]),
             offset_y=float(data["offset_y"]),
             offset_z=float(data["offset_z"]),
@@ -58,6 +61,7 @@ class AcousticHit(Datatype):
             "bin_idx": self.bin_idx,
             "distance": self.distance,
             "incidence_angle": self.incidence_angle,
+            "depression_angle": self.depression_angle,
             "offset_x": self.offset_x,
             "offset_y": self.offset_y,
             "offset_z": self.offset_z,
