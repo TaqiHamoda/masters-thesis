@@ -252,6 +252,7 @@ class Registration:
         offsets,
         distances,
         incidence_angles,
+        depression_angles,
         bins) = self.get_geometry(ts, v_points, v_normals)
 
         max_dist = np.max(distances)
