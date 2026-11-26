@@ -411,7 +411,7 @@ def estimate_parameter_covariance(obs_intensity: np.ndarray,
             group_ends[g0:g1] - group_starts[g0:g1],
             obs_intensity, obs_cos_incidence, obs_depression_angle,
             obs_range, obs_channel, degree,
-            port_present, stbd_present, per_observation=True)
+            port_present, stbd_present)
 
         res = np.zeros(n)
         jbs = [np.zeros((d + 1) * n), np.zeros((d + 1) * n), np.zeros(n)]
