@@ -70,7 +70,7 @@ class VertexCost(pyceres.CostFunction):
         end: int,
         obs_intensity: np.ndarray,
         obs_cos_incidence: np.ndarray,
-        obs_cos_depression: np.ndarray,
+        obs_depression_angle: np.ndarray,
         obs_range: np.ndarray,
         obs_channel: np.ndarray,
         degree: int,
@@ -89,7 +89,7 @@ class VertexCost(pyceres.CostFunction):
         # Keep references to the global observation arrays — no data is copied
         self.obs_intensity = obs_intensity
         self.obs_cos_incidence = obs_cos_incidence
-        self.obs_cos_depression = obs_cos_depression
+        self.obs_depression_angle = obs_depression_angle
         self.obs_range = obs_range
         self.obs_channel = obs_channel
         self.degree = int(degree)
@@ -111,7 +111,7 @@ class VertexCost(pyceres.CostFunction):
         I = self.obs_intensity[self.start:self.end]
         cos_theta = self.obs_cos_incidence[self.start:self.end]
         r = self.obs_range[self.start:self.end]
-        u = self.obs_cos_depression[self.start:self.end]
+        u = self.obs_depression_angle[self.start:self.end]
         channels = self.obs_channel[self.start:self.end]
 
         n_obs = self.end - self.start
@@ -333,7 +333,7 @@ class BundleAdjustment:
         obs_vertex = np.zeros(upper, dtype=np.int64)
         obs_channel = np.zeros(upper, dtype=np.int8)
         obs_cos_incidence = np.zeros(upper, dtype=np.float64)
-        obs_cos_depression = np.zeros(upper, dtype=np.float64)
+        obs_depression_angle = np.zeros(upper, dtype=np.float64)
         obs_range = np.zeros(upper, dtype=np.float64)
         obs_ping_idx = np.zeros(upper, dtype=np.int32)
         obs_bin_idx = np.zeros(upper, dtype=np.int32)
@@ -379,9 +379,9 @@ class BundleAdjustment:
 
                     obs_vertex[count] = vertex_idx
                     obs_channel[count] = 0 if bin_idx < num_samples else 1
-                    obs_cos_incidence[count] = min(max(np.cos(incidence_angle), 0.0), 1.0)
+                    obs_cos_incidence[count] = np.clip(np.cos(incidence_angle), 0.0, 1.0)
                     # Normalized pattern angle of the Chebyshev basis
-                    obs_cos_depression[count] = np.float64(2.0 * min(max(np.cos(depression_angle), 0.0), 1.0) - 1.0)
+                    obs_depression_angle[count] = np.float64(2.0 * np.clip(2.0 * depression_angle / np.pi, 0.0, 1.0) - 1.0)
                     obs_range[count] = distance
                     obs_ping_idx[count] = ping_idx
                     obs_bin_idx[count] = bin_idx
@@ -395,11 +395,11 @@ class BundleAdjustment:
         self.obs_vertex, obs_vertex = obs_vertex[:count].copy(), None
         self.obs_channel, obs_channel = obs_channel[:count].copy(), None
         self.obs_cos_incidence, obs_cos_incidence = obs_cos_incidence[:count].copy(), None
-        self.obs_cos_depression, obs_cos_depression = obs_cos_depression[:count].copy(), None
+        self.obs_depression_angle, obs_depression_angle = obs_depression_angle[:count].copy(), None
         self.obs_range, obs_range = obs_range[:count].copy(), None
         self.obs_ping_idx, obs_ping_idx = obs_ping_idx[:count].copy(), None
         self.obs_bin_idx, obs_bin_idx = obs_bin_idx[:count].copy(), None
-        del obs_vertex, obs_channel, obs_cos_incidence, obs_cos_depression, obs_range, obs_ping_idx, obs_bin_idx
+        del obs_vertex, obs_channel, obs_cos_incidence, obs_depression_angle, obs_range, obs_ping_idx, obs_bin_idx
 
         # Gather the observed intensities in one vectorized pass, then release
         # the full waterfall (the largest allocation of this phase)
@@ -462,7 +462,7 @@ class BundleAdjustment:
         self.obs_vertex = self.obs_vertex[order]
         self.obs_intensity = self.obs_intensity[order]
         self.obs_cos_incidence = self.obs_cos_incidence[order]
-        self.obs_cos_depression = self.obs_cos_depression[order]
+        self.obs_depression_angle = self.obs_depression_angle[order]
         self.obs_range = self.obs_range[order]
         self.obs_channel = self.obs_channel[order]
         self.obs_ping_idx = self.obs_ping_idx[order]
@@ -498,7 +498,7 @@ class BundleAdjustment:
                 start, end,
                 self.obs_intensity,
                 self.obs_cos_incidence,
-                self.obs_cos_depression,
+                self.obs_depression_angle,
                 self.obs_range,
                 self.obs_channel,
                 self.beam_degree,
@@ -553,7 +553,7 @@ class BundleAdjustment:
             I = self.obs_intensity[start:end]
             cos_theta = self.obs_cos_incidence[start:end]
             r = self.obs_range[start:end]
-            u = self.obs_cos_depression[start:end]
+            u = self.obs_depression_angle[start:end]
             channels = self.obs_channel[start:end]
 
             # Compute W_k = cos(theta_k) * exp(-ALPHA_JAC * alpha * r_k)
