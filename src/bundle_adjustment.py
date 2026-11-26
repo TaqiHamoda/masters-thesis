@@ -129,8 +129,7 @@ class VertexChunkCost(pyceres.CostFunction):
                  obs_channel: np.ndarray,
                  degree: int,
                  port_present: bool,
-                 stbd_present: bool,
-                 per_observation: bool = True):
+                 stbd_present: bool):
         pyceres.CostFunction.__init__(self)
 
         self.start = int(start)
@@ -151,10 +150,7 @@ class VertexChunkCost(pyceres.CostFunction):
         self.stbd_present = bool(stbd_present)
         self.per_observation = bool(per_observation)
 
-        if self.per_observation:
-            self.set_num_residuals(self.n)
-        else:
-            self.set_num_residuals(self.V)
+        self.set_num_residuals(self.n)
         beam_sizes = [degree + 1] * (int(port_present) + int(stbd_present))
         self.set_parameter_block_sizes(beam_sizes + [1])
 
@@ -224,14 +220,6 @@ class VertexChunkCost(pyceres.CostFunction):
                       out=dR_stbd, where=active[:, None])
 
         e = I - R[self.seg_ids] * W   # clipped/zero-weight rows -> e = I
-
-        if not self.per_observation:
-            self._evaluate_rms(e, W, r, R, active, dR_alpha,
-                               dR_port if self.port_present else None,
-                               dR_stbd if self.stbd_present else None,
-                               T, is_port, residuals, jacobians)
-            return True
-
         residuals[:] = e
 
         if jacobians is None:
@@ -255,59 +243,6 @@ class VertexChunkCost(pyceres.CostFunction):
         if jb is not None:
             jb[:] = Ja
         return True
-
-    # -----------------------------------------------------------------
-
-    def _evaluate_rms(self, e, W, r, R, active, dR_alpha, dR_port, dR_stbd,
-                      T, is_port, residuals, jacobians) -> None:
-        """One RMS residual per vertex: sqrt(sum e^2 / n_v).
-
-        dr_v/dp = (1 / (n_v r_v)) * sum_k e_k de_k/dp on active vertices;
-        clipped/zero-weight vertices have e = I constant in p, so their
-        rows are exactly zero.
-        """
-        starts = self.seg_starts
-        nv = self.seg_lengths.astype(np.float64)
-        ssq = np.add.reduceat(e * e, starts)
-        res = np.zeros(self.V)
-        np.divide(ssq, nv, out=res)
-        res = np.sqrt(res)
-        residuals[:] = res
-
-        if jacobians is None:
-            return
-
-        ok = res > 0  # perfect fits: zero row
-        inv = np.zeros(self.V)
-        np.divide(1.0, nv * res, out=inv, where=ok)
-
-        eW = e * W
-        EWsum = np.add.reduceat(eW, starts)               # sum e W      (V,)
-
-        if self.port_present:
-            # A_j(v) = sum_k e_k de_k/dbeta_j on active vertices
-            #   de_k/dbeta_j = -R* W_k T_j (channel match) - W_k dR*/dbeta_j
-            EWT_p = np.add.reduceat(
-                (eW[:, None] * T * is_port[:, None]), starts, axis=0)
-            A = -(R[:, None] * EWT_p + EWsum[:, None] * dR_port)
-            A[~active] = 0.0
-            jb = jacobians[self.port_slot]
-            if jb is not None:
-                jb[:] = ((A * inv[:, None]).reshape(-1))
-        if self.stbd_present:
-            EWT_s = np.add.reduceat(
-                (eW[:, None] * T * (~is_port)[:, None]), starts, axis=0)
-            A = -(R[:, None] * EWT_s + EWsum[:, None] * dR_stbd)
-            A[~active] = 0.0
-            jb = jacobians[self.stbd_slot]
-            if jb is not None:
-                jb[:] = ((A * inv[:, None]).reshape(-1))
-        ErW = np.add.reduceat(e * r * W, starts)
-        A = ALPHA_JAC * R * ErW - EWsum * dR_alpha
-        A[~active] = 0.0
-        jb = jacobians[-1]
-        if jb is not None:
-            jb[:] = A * inv
 
 
 def build_chunks(group_starts: np.ndarray, group_ends: np.ndarray,
@@ -410,161 +345,108 @@ def obs_vertex_max(vertex_ids: np.ndarray) -> int:
     return int(vertex_ids[-1]) if len(vertex_ids) else -1
 
 
-class VertexCost(pyceres.CostFunction):
+# =====================================================================
+# Post-solve covariance WITHOUT pyceres.Covariance
+# =====================================================================
+# Ceres' Covariance machinery builds a sparse Jacobian indexed with int32.
+# With per-observation residuals at 138M rows the structural nonzeros are
+# ~2.15e9 > 2^31 - 1, so Covariance.compute() dies with "Unable to create
+# Jacobian matrix: Too many entries" (and pyceres then segfaults on the
+# null pointer). The parameters are only 21, so the covariance is a tiny
+# 21x21 matrix: accumulate the normal equations chunk by chunk instead,
+# straight from VertexChunkCost's already-validated Jacobians. One pass,
+# ~5 MB peak per chunk, no int32 limit.
+
+def estimate_parameter_covariance(obs_intensity: np.ndarray,
+                                   obs_cos_incidence: np.ndarray,
+                                   obs_depression_angle: np.ndarray,
+                                   obs_range: np.ndarray,
+                                   obs_channel: np.ndarray,
+                                   group_starts: np.ndarray,
+                                   group_ends: np.ndarray,
+                                   beam_port_coeffs: np.ndarray,
+                                   beam_stbd_coeffs: np.ndarray,
+                                   alpha_val: float,
+                                   degree: int,
+                                   loss_delta: float,
+                                   gauge_weight: float,
+                                   chunk_target: int = CHUNK_TARGET_OBS):
+    """Huber-sandwich covariance of [port (d+1) | stbd (d+1) | alpha (1)]
+    at the solved parameters.
+
+    For Huber M-estimation the defensible standard error uses the sandwich
+        Cov = A^-1 B A^-1,   A = sum_k w_k J_k J_k^T,
+                              B = sum_k w_k^2 e_k^2 J_k J_k^T
+    with IRLS weights w_k = min(1, loss_delta / |e_k|). With a huge
+    loss_delta (w = 1) this reduces to the heteroscedasticity-consistent
+    HC0 covariance, and A^-1 * ssr/(m - P) is the classical Gaussian one.
+
+    The gauge prior (BeamPriorCost, residual gauge_weight * c_0) is folded
+    into A so the exactly-flat gauge direction does not make A singular.
+
+    Returns (cov (P, P), info dict with se_alpha, m, ssr, cond_A).
     """
-    Residual for one mesh vertex after analytically eliminating its reflectivity.
+    d = degree
+    P = 2 * (d + 1) + 1
+    A = np.zeros((P, P))
+    B = np.zeros((P, P))
+    ssr = 0.0
+    m = 0
+    alpha_arr = np.array([float(alpha_val)])
 
-    Given fixed beam and absorption parameters, the optimal R_v is
+    chunks = build_chunks(group_starts, group_ends, chunk_target)
+    for cs, ce, g0, g1 in chunks:
+        ch_slice = obs_channel[cs:ce]
+        port_present = bool(np.any(ch_slice == 0))
+        stbd_present = bool(np.any(ch_slice == 1))
+        n = ce - cs
 
-        R_v* = Σ_k I_k * W_k / Σ_k W_k^2,   W_k = cos(theta_k) * G_k * L_k
+        # NOTE: the parameter list must mirror what pyceres passes to this
+        # chunk (only the blocks present), or the slot mapping is wrong.
+        plist = ([beam_port_coeffs] if port_present else []) + \
+               ([beam_stbd_coeffs] if stbd_present else []) + [alpha_arr]
 
-    and the minimized cost is
+        cost = VertexChunkCost(
+            cs, ce,
+            group_starts[g0:g1] - cs,
+            group_ends[g0:g1] - group_starts[g0:g1],
+            obs_intensity, obs_cos_incidence, obs_depression_angle,
+            obs_range, obs_channel, degree,
+            port_present, stbd_present, per_observation=True)
 
-        cost_v = Σ_k I_k^2 - (Σ_k I_k * W_k)^2 / Σ_k W_k^2.
+        res = np.zeros(n)
+        jbs = [np.zeros((d + 1) * n), np.zeros((d + 1) * n), np.zeros(n)]
+        cost.Evaluate(plist, res, jbs)
 
-    One scalar residual per vertex; parameter blocks are only the three global
-    blocks: [beam_port_coeffs, beam_stbd_coeffs, alpha]. The cost function holds
-    only the start/end indices into the BundleAdjustment's observation arrays
-    and references to those arrays, avoiding copying observation data.
+        J = np.zeros((n, P))
+        if port_present:
+            J[:, 0:d + 1] = jbs[cost.port_slot].reshape(n, d + 1)
+        if stbd_present:
+            J[:, d + 1:2 * d + 2] = jbs[cost.stbd_slot].reshape(n, d + 1)
+        J[:, -1] = jbs[-1]
 
-    Parameter blocks:
-        [beam_port_coeffs (degree+1,), beam_stbd_coeffs (degree+1,), alpha (1,)]
-    """
+        # Huber IRLS weights at the solution
+        w = np.minimum(1.0, loss_delta / np.maximum(np.abs(res), 1e-300))
+        A += (J * w[:, None]).T @ J
+        B += (J * (w * res)[:, None]).T @ (J * (w * res)[:, None])
+        ssr += float((w * res ** 2).sum())
+        m += n
 
-    def __init__(
-        self,
-        start: int,
-        end: int,
-        obs_intensity: np.ndarray,
-        obs_cos_incidence: np.ndarray,
-        obs_depression_angle: np.ndarray,
-        obs_range: np.ndarray,
-        obs_channel: np.ndarray,
-        degree: int,
-        port_present: bool,
-        stbd_present: bool,
-    ):
-        pyceres.CostFunction.__init__(self)
+    # fold the gauge prior into A (residual = gauge_weight * c_0)
+    A[0, 0] += gauge_weight ** 2
+    A[d + 1, d + 1] += gauge_weight ** 2
 
-        self.set_num_residuals(1)
-
-        beam_sizes = [degree + 1] * (int(port_present) + int(stbd_present))
-        self.set_parameter_block_sizes(beam_sizes + [1])
-
-        self.start = int(start)
-        self.end = int(end)
-        # Keep references to the global observation arrays — no data is copied
-        self.obs_intensity = obs_intensity
-        self.obs_cos_incidence = obs_cos_incidence
-        self.obs_depression_angle = obs_depression_angle
-        self.obs_range = obs_range
-        self.obs_channel = obs_channel
-        self.degree = int(degree)
-        self.port_present = bool(port_present)
-        self.stbd_present = bool(stbd_present)
-        self.port_slot = 0
-        self.stbd_slot = 1 if port_present else 0
-
-    def _channel_slot(self, channel: int) -> int:
-        if channel == 0:
-            return self.port_slot
-        return self.stbd_slot
-
-    def Evaluate(self, parameters, residuals, jacobians) -> bool:
-        beam_params = list(parameters[: -1])
-        alpha_val = parameters[-1][0]
-
-        # Slice the observation arrays for this vertex
-        I = self.obs_intensity[self.start:self.end]
-        cos_theta = self.obs_cos_incidence[self.start:self.end]
-        r = self.obs_range[self.start:self.end]
-        u = self.obs_depression_angle[self.start:self.end]
-        channels = self.obs_channel[self.start:self.end]
-
-        n_obs = self.end - self.start
-
-        # Evaluate Chebyshev basis once for all observations
-        T_basis = chebvander(u, self.degree)
-
-        # Precompute WG for all observations
-        WG = np.empty(n_obs, dtype=np.float64)
-        sum_W2 = 0.0
-
-        for local_idx in range(n_obs):
-            channel = int(channels[local_idx])
-            coeffs = beam_params[self._channel_slot(channel)]
-            log_G = T_basis[local_idx] @ coeffs
-            G = np.exp(np.clip(log_G, -10.0, 10.0))
-            WG_val = cos_theta[local_idx] * np.exp(-ALPHA_JAC * alpha_val * r[local_idx]) * G
-            WG[local_idx] = WG_val
-            sum_W2 += WG_val ** 2
-
-        # Guard: skip vertex if all weights are near-zero (grazing angles or far range)
-        if sum_W2 < 1e-15:
-            residuals[0] = np.linalg.norm(I)  # sqrt(sum I_k^2)
-            if jacobians is not None:
-                for jb in jacobians:
-                    if jb is not None:
-                        jb[:] = 0.0
-            return True
-
-        # Optimal reflectivity and per-observation errors
-        R_v_star = np.dot(I, WG) / sum_W2
-        errors = I - R_v_star * WG
-
-        # Residual: sqrt(sum of squared errors) -- numerically stable
-        residual = np.linalg.norm(errors)
-        residuals[0] = residual
-
-        if jacobians is None:
-            return True
-
-        # Guard: zero gradient when residual is zero (perfect fit)
-        if residual < 1e-15:
-            for jb in jacobians:
-                if jb is not None:
-                    jb[:] = 0.0
-            return True
-
-        # Jacobians using verified envelope theorem formula:
-        # \partial residual / \partial p = (1 / (2 * residual)) * \partial f / \partial p
-        # where f = sum_k errors_k^2
-        # \partial f / \partial p = -2 * R_v* * sum_k errors_k * \partial W_k / \partial p
-        #
-        # \partial W_k / \partial \beta_{c,j} = W_k * T_j(u_k)  for observations of channel c
-        # \partial W_k / \partial \alpha      = -ALPHA_JAC * r_k * W_k
-
-        inv_two_res = 1.0 / (2.0 * residual)
-        factor = -2.0 * R_v_star * inv_two_res  # = -R_v* / residual
-
-        # Zero all Jacobian blocks first
-        for jb in jacobians:
-            if jb is not None:
-                jb[:] = 0.0
-
-        # Alpha parameter block (last block)
-        jb_alpha = jacobians[-1]
-        if jb_alpha is not None:
-            for local_idx in range(n_obs):
-                dW_dalpha = -ALPHA_JAC * r[local_idx] * WG[local_idx]
-                jb_alpha[0] += factor * errors[local_idx] * dW_dalpha
-
-        # Beam coefficient blocks
-        slot = 0
-        for channel, present in ((0, self.port_present), (1, self.stbd_present)):
-            if not present:
-                continue
-            jb = jacobians[slot]
-            if jb is not None:
-                for local_idx in range(n_obs):
-                    if channels[local_idx] != channel:
-                        continue
-                    # dWG/d\beta_j = WG * T_j(u)
-                    dWG_dbeta = WG[local_idx] * T_basis[local_idx, :]
-                    jb[:] += factor * errors[local_idx] * dWG_dbeta
-            slot += 1
-
-        return True
+    Ainv = np.linalg.inv(A)          # 21x21; use pinv + warning if singular
+    cov = Ainv @ B @ Ainv
+    info = {
+        "se_alpha": float(np.sqrt(cov[-1, -1])),
+        "m": m,
+        "ssr": ssr,
+        "cond_A": float(np.linalg.cond(A)),
+        "sigma2_gaussian": ssr / max(m - P, 1),
+        "cov_gaussian": Ainv * (ssr / max(m - P, 1)),
+    }
+    return cov, info
 
 
 class BeamPriorCost(pyceres.CostFunction):
@@ -842,10 +724,6 @@ class BundleAdjustment:
         # a few thousand calls. Residuals are per OBSERVATION, so Huber
         # acts on individual observation errors, and R_v* is clipped
         # nonnegative (exact 1-D NNLS).
-        # per_observation=False switches to one RMS residual per vertex:
-        # ~3.2 GB Jacobian instead of ~23 GB at 138M observations, and
-        # Huber's delta becomes independent of the observation count.
-        per_observation = True
 
         chunks = build_chunks(group_starts, group_ends, CHUNK_TARGET_OBS)
         huber = pyceres.HuberLoss(self.loss_delta)   # shared instance
@@ -868,8 +746,7 @@ class BundleAdjustment:
                 self.obs_channel,
                 self.beam_degree,
                 port_present,
-                stbd_present,
-                per_observation=per_observation,
+                stbd_present
             )
 
             blocks = ([beam_port_coeffs] if port_present else []) \
@@ -883,8 +760,7 @@ class BundleAdjustment:
             print(f"Built problem: {vertex_ids.size} vertices in {len(chunks)} "
                   f"chunk blocks ({n_port} chunks referencing port, "
                   f"{n_stbd} starboard), degree {self.beam_degree}, "
-                  f"{'per-observation' if per_observation else 'per-vertex RMS'} "
-                  f"residuals")
+                  "per-observation residuals")
             log_vertex_diagnostics(self.obs_vertex,
                                    self.obs_depression_angle,
                                    group_starts,
@@ -905,22 +781,25 @@ class BundleAdjustment:
         summary = pyceres.SolverSummary()
         pyceres.solve(options, problem, summary)
 
-        cov_opts = pyceres.CovarianceOptions()
-        cov_opts.apply_loss_function = True    # see caveat below
-        # cov_opts.num_threads = 1               # Python cost functions: GIL-serialized anyway
-        cov = pyceres.Covariance(cov_opts)
-        pairs = [(beam_port_coeffs, beam_port_coeffs), (beam_stbd_coeffs, beam_stbd_coeffs),
-                (beam_port_coeffs, beam_stbd_coeffs), (alpha, alpha),
-                (beam_port_coeffs, alpha), (beam_stbd_coeffs, alpha)]
-        if cov.compute(pairs, problem):
-            C_pp = cov.get_covariance_block(beam_port_coeffs, beam_port_coeffs)  # (d+1, d+1)
-            C_aa = cov.get_covariance_block(alpha, alpha)                        # (1, 1)
-            C_pa = cov.get_covariance_block(beam_port_coeffs, alpha)             # (d+1, 1)
-            # marginal standard errors:
-
-            se_port = np.sqrt(np.diag(C_pp))
-            se_alpha = np.sqrt(C_aa[0, 0])
-            print(f"Covariance computed: SE port={se_port}, SE alpha={se_alpha}")
+        cov, info = estimate_parameter_covariance(
+            self.obs_intensity,
+            self.obs_cos_incidence,
+            self.obs_depression_angle,
+            self.obs_range,
+            self.obs_channel,
+            group_starts,
+            group_ends,
+            beam_port_coeffs,
+            beam_stbd_coeffs,
+            float(alpha[0]),
+            self.beam_degree,
+            self.loss_delta,
+            self.gauge_weight,
+            chunk_target=CHUNK_TARGET_OBS,
+        )
+        print(f"Covariance estimate: se_alpha={info['se_alpha']:.6f}, "
+              f"m={info['m']}, ssr={info['ssr']:.6f}, cond(A)={info['cond_A']:.3e}, "
+              f"sigma2_gaussian={info['sigma2_gaussian']:.6f}")
 
         if self.verbose:
             print(summary.BriefReport())
