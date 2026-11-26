@@ -20,29 +20,6 @@ from .dataset import Dataset
 ALPHA_JAC = 2.0 * np.log(10.0) / 10.0
 
 
-def chebyshev_basis(u: np.ndarray, degree: int) -> np.ndarray:
-    """
-    Returns the (len(u), degree + 1) Chebyshev basis matrix T_0..T_degree of the
-    normalized pattern angle u = 2 * theta / max_angle - 1 in [-1, 1].
-
-    Chebyshev is used instead of raw Taylor monomials because the monomial basis
-    over a finite angle interval is severely ill-conditioned; for a given degree
-    the reachable polynomials are identical.
-    """
-    u = np.asarray(u, dtype=np.float64)
-    T = np.empty((u.shape[0], degree + 1), dtype=np.float64)
-
-    T[:, 0] = 1.0
-    if degree == 0:
-        return T
-
-    T[:, 1] = u
-    for k in range(2, degree + 1):
-        T[:, k] = 2.0 * u * T[:, k - 1] - T[:, k - 2]
-
-    return T
-
-
 class VertexCost(pyceres.CostFunction):
     """
     Residual for one mesh vertex after analytically eliminating its reflectivity.
@@ -117,7 +94,7 @@ class VertexCost(pyceres.CostFunction):
         n_obs = self.end - self.start
 
         # Evaluate Chebyshev basis once for all observations
-        T_basis = chebyshev_basis(u, self.degree)
+        T_basis = np.polynomial.chebyshev.chebvander(u, self.degree)
 
         # Precompute WG for all observations
         WG = np.empty(n_obs, dtype=np.float64)
@@ -560,7 +537,7 @@ class BundleAdjustment:
             W = cos_theta * np.exp(-ALPHA_JAC * alpha[0] * r)
 
             # Evaluate beam gains
-            T = chebyshev_basis(u, self.beam_degree)
+            T = np.polynomial.chebyshev.chebvander(u, self.beam_degree)
             sum_IW = 0.0
             sum_W2 = 0.0
 
