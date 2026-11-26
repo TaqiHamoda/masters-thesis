@@ -148,7 +148,6 @@ class VertexChunkCost(pyceres.CostFunction):
         self.degree = int(degree)
         self.port_present = bool(port_present)
         self.stbd_present = bool(stbd_present)
-        self.per_observation = bool(per_observation)
 
         self.set_num_residuals(self.n)
         beam_sizes = [degree + 1] * (int(port_present) + int(stbd_present))
