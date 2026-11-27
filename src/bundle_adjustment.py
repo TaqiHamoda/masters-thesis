@@ -49,8 +49,7 @@ def per_vertex_iqr(u_sorted: np.ndarray, group_starts: np.ndarray,
 def log_vertex_diagnostics(obs_vertex: np.ndarray,
                            obs_depression_angle: np.ndarray,
                            group_starts: np.ndarray,
-                           group_lengths: np.ndarray,
-                           stream=print) -> None:
+                           group_lengths: np.ndarray) -> None:
     """Verbose-mode report: obs-count distribution and angle spread.
 
     Call after Phase B (arrays already sorted by vertex). Peak extra
@@ -70,13 +69,13 @@ def log_vertex_diagnostics(obs_vertex: np.ndarray,
     multi = lengths > 1  # singletons have IQR = 0 by construction
 
     q = np.percentile
-    stream("Vertex diagnostics:")
-    stream(f"  observations/vertex: min {lengths.min()}, "
-           f"p1 {q(lengths, 1):.0f}, median {np.median(lengths):.0f}, "
-           f"p99 {q(lengths, 99):.0f}, max {lengths.max()}")
-    stream(f"  single-observation vertices: {int((~multi).sum())} "
-           f"({100.0 * (~multi).mean():.2f}%)")
-    stream(f"  depression-angle IQR (rad), vertices with n>1: "
+    print("Vertex diagnostics:")
+    print(f"  observations/vertex: min {lengths.min()}, "
+          f"p1 {q(lengths, 1):.0f}, median {np.median(lengths):.0f}, "
+          f"p99 {q(lengths, 99):.0f}, max {lengths.max()}")
+    print(f"  single-observation vertices: {int((~multi).sum())} "
+          f"({100.0 * (~multi).mean():.2f}%)")
+    print(f"  depression-angle IQR (rad), vertices with n>1: "
            f"median {np.median(iqr_phi[multi]):.4f}, "
            f"p25 {q(iqr_phi[multi], 25):.4f}, "
            f"p75 {q(iqr_phi[multi], 75):.4f}, "
@@ -86,11 +85,6 @@ def log_vertex_diagnostics(obs_vertex: np.ndarray,
     # single-angle and the pattern is only weakly constrained (cf. the
     # identifiability discussion in the review canvas).
 
-
-# =====================================================================
-# 2+3+4. Chunked cost function with per-observation residuals and
-#        nonnegative reflectivity
-# =====================================================================
 
 class VertexChunkCost(pyceres.CostFunction):
     """Per-observation least-squares cost for a contiguous chunk of vertices.
@@ -103,14 +97,8 @@ class VertexChunkCost(pyceres.CostFunction):
         [beam_port_coeffs (d+1), beam_stbd_coeffs (d+1), alpha (1)]
         (drop the channel blocks that are absent from this chunk)
 
-    Residual layout:
-      per_observation=True  : one residual per observation, e_k = I_k -
+    Residual layout: one residual per observation, e_k = I_k -
           R_v* W_k. This is what makes Huber act per observation.
-      per_observation=False : one residual per vertex, the RMS error
-          sqrt(sum_k e_k^2 / n_v). Memory stays at the per-vertex level
-          and Huber's delta becomes independent of the observation count;
-          the objective then weights each vertex by its mean squared
-          error (equal weight per seabed patch).
 
     Nonnegativity: R_v* = max(0, sum I_k W_k / sum W_k^2) is the exact
     1-D NNLS solution. For uint16-derived intensities R* >= 0 almost
@@ -151,10 +139,14 @@ class VertexChunkCost(pyceres.CostFunction):
 
         self.set_num_residuals(self.n)
         beam_sizes = [degree + 1] * (int(port_present) + int(stbd_present))
-        self.set_parameter_block_sizes(beam_sizes + [1])
+        self.set_parameter_block_sizes(beam_sizes + [1] + [1])
 
         self.port_slot = 0
         self.stbd_slot = 1 if port_present else 0
+        # slot of alpha (and of k, when fitted) inside this chunk's
+        # parameter/jacobian list: beam blocks first, then alpha, then k
+        self.alpha_idx = int(port_present) + int(stbd_present)
+        self.spread_idx = self.alpha_idx + 1
 
     # -----------------------------------------------------------------
 
@@ -170,7 +162,8 @@ class VertexChunkCost(pyceres.CostFunction):
 
         port_c = parameters[self.port_slot] if self.port_present else None
         stbd_c = parameters[self.stbd_slot] if self.stbd_present else None
-        alpha_val = parameters[-1][0]
+        alpha_val = parameters[self.alpha_idx][0]
+        k_val = parameters[self.spread_idx][0]
 
         T = chebvander(u, d)                                # (n, d+1)
         is_port = ch == 0
@@ -184,12 +177,15 @@ class VertexChunkCost(pyceres.CostFunction):
             log_g = T @ stbd_c
         G = np.exp(np.clip(log_g, -10.0, 10.0))
         W = cos_t * np.exp(-ALPHA_JAC * alpha_val * r) * G  # (n,)
+        W = W * np.exp(-k_val * np.log(r))   # r^-k; exactly 1 at k = 0
 
         starts = self.seg_starts                           # already local
         S = np.add.reduceat(W * W, starts)                  # sum W^2     (V,)
         SIW = np.add.reduceat(I * W, starts)               # sum I W     (V,)
         SIRW = np.add.reduceat(I * W * r, starts)          # sum I r W   (V,)
         SRW2 = np.add.reduceat(W * W * r, starts)           # sum r W^2   (V,)
+        SILOGW = np.add.reduceat(I * W * np.log(r), starts)  # sum I ln(r) W
+        SLOGW2 = np.add.reduceat(W * W * np.log(r), starts)  # sum ln(r) W^2
 
         # ---- per-vertex eliminated reflectivity, clipped nonnegative ----
         R_raw = np.zeros(self.V)
@@ -201,6 +197,13 @@ class VertexChunkCost(pyceres.CostFunction):
         dR_alpha = np.zeros(self.V)
         np.divide(-ALPHA_JAC * SIRW + 2.0 * ALPHA_JAC * R * SRW2, S,
                   out=dR_alpha, where=active)
+
+        # dR*/dk mirrors dR*/dalpha with (-ALPHA_JAC * r) replaced by
+        # (-ln r), because d ln W / dk = -ln r
+        dR_spread = np.zeros(self.V)
+        np.divide(-SILOGW + 2.0 * R * SLOGW2, S,
+                    out=dR_spread, where=active)
+
         if self.port_present:
             IW_T_p = np.add.reduceat(
                 (I * W)[:, None] * T * is_port[:, None], starts, axis=0)
@@ -231,16 +234,25 @@ class VertexChunkCost(pyceres.CostFunction):
             jb = jacobians[self.port_slot]
             if jb is not None:
                 jb[:] = Jp.reshape(-1)                  # row-major (n, d+1)
+
         if self.stbd_present:
             Js = np.where((~is_port)[:, None], -(Rb * W)[:, None] * T, 0.0)
             Js -= W[:, None] * dR_stbd[self.seg_ids]
             jb = jacobians[self.stbd_slot]
             if jb is not None:
                 jb[:] = Js.reshape(-1)
+
         Ja = ALPHA_JAC * r * Rb * W - W * dR_alpha[self.seg_ids]
-        jb = jacobians[-1]
+        jb = jacobians[self.alpha_idx]
         if jb is not None:
             jb[:] = Ja
+
+        # de/dk = -R* dW/dk - W dR*/dk = R* ln(r) W - W dR*/dk
+        Jk = Rb * np.log(r) * W - W * dR_spread[self.seg_ids]
+        jb = jacobians[self.spread_idx]
+        if jb is not None:
+            jb[:] = Jk
+
         return True
 
 
@@ -279,6 +291,7 @@ def extract_reflectivity(obs_intensity: np.ndarray,
                          beam_stbd_coeffs: np.ndarray,
                          alpha_val: float,
                          degree: int,
+                         spread_val: float,
                          w2_floor: float = 1e-12,
                          min_correlation: float = 0.2,
                          verbose: bool = True):
@@ -304,6 +317,7 @@ def extract_reflectivity(obs_intensity: np.ndarray,
                     T @ beam_stbd_coeffs)
     G = np.exp(np.clip(log_g, -10.0, 10.0))       # match the cost's clamp
     W = obs_cos_incidence * np.exp(-ALPHA_JAC * alpha_val * obs_range) * G
+    W = W * np.exp(-spread_val * np.log(obs_range))
 
     S = np.add.reduceat(W * W, group_starts)       # (V,)
     SIW = np.add.reduceat(obs_intensity * W, group_starts)
@@ -369,9 +383,10 @@ def estimate_parameter_covariance(obs_intensity: np.ndarray,
                                    degree: int,
                                    loss_delta: float,
                                    gauge_weight: float,
+                                   spread_val: float = 0.0,
                                    chunk_target: int = CHUNK_TARGET_OBS):
-    """Huber-sandwich covariance of [port (d+1) | stbd (d+1) | alpha (1)]
-    at the solved parameters.
+    """Huber-sandwich covariance of [port (d+1) | stbd (d+1) | alpha (1)
+    | spreading k (1)] at the solved parameters.
 
     For Huber M-estimation the defensible standard error uses the sandwich
         Cov = A^-1 B A^-1,   A = sum_k w_k J_k J_k^T,
@@ -386,12 +401,13 @@ def estimate_parameter_covariance(obs_intensity: np.ndarray,
     Returns (cov (P, P), info dict with se_alpha, m, ssr, cond_A).
     """
     d = degree
-    P = 2 * (d + 1) + 1
+    P = 2 * (d + 1) + 2
     A = np.zeros((P, P))
     B = np.zeros((P, P))
     ssr = 0.0
     m = 0
     alpha_arr = np.array([float(alpha_val)])
+    spread_arr = np.array([float(spread_val)])
 
     chunks = build_chunks(group_starts, group_ends, chunk_target)
     for cs, ce, g0, g1 in chunks:
@@ -403,7 +419,7 @@ def estimate_parameter_covariance(obs_intensity: np.ndarray,
         # NOTE: the parameter list must mirror what pyceres passes to this
         # chunk (only the blocks present), or the slot mapping is wrong.
         plist = ([beam_port_coeffs] if port_present else []) + \
-               ([beam_stbd_coeffs] if stbd_present else []) + [alpha_arr]
+               ([beam_stbd_coeffs] if stbd_present else []) + [alpha_arr] + [spread_arr]
 
         cost = VertexChunkCost(
             cs, ce,
@@ -413,8 +429,19 @@ def estimate_parameter_covariance(obs_intensity: np.ndarray,
             obs_range, obs_channel, degree,
             port_present, stbd_present)
 
+        # Buffers must sit at the SAME slots Evaluate indexes them by:
+        # beam blocks (present ones only), then alpha, then k. (Filling
+        # slot-by-slot also keeps single-channel chunks correct, where
+        # alpha is NOT the last buffer.)
         res = np.zeros(n)
-        jbs = [np.zeros((d + 1) * n), np.zeros((d + 1) * n), np.zeros(n)]
+        jbs = [None] * (int(port_present) + int(stbd_present) + 2)
+        slot = 0
+        if port_present:
+            jbs[slot] = np.zeros((d + 1) * n); slot += 1
+        if stbd_present:
+            jbs[slot] = np.zeros((d + 1) * n); slot += 1
+        jbs[cost.alpha_idx] = np.zeros(n)
+        jbs[cost.spread_idx] = np.zeros(n)
         cost.Evaluate(plist, res, jbs)
 
         J = np.zeros((n, P))
@@ -422,7 +449,8 @@ def estimate_parameter_covariance(obs_intensity: np.ndarray,
             J[:, 0:d + 1] = jbs[cost.port_slot].reshape(n, d + 1)
         if stbd_present:
             J[:, d + 1:2 * d + 2] = jbs[cost.stbd_slot].reshape(n, d + 1)
-        J[:, -1] = jbs[-1]
+        J[:, 2 * d + 2] = jbs[cost.alpha_idx]
+        J[:, 2 * d + 3] = jbs[cost.spread_idx]
 
         # Huber IRLS weights at the solution
         w = np.minimum(1.0, loss_delta / np.maximum(np.abs(res), 1e-300))
@@ -438,13 +466,18 @@ def estimate_parameter_covariance(obs_intensity: np.ndarray,
     Ainv = np.linalg.inv(A)          # 21x21; use pinv + warning if singular
     cov = Ainv @ B @ Ainv
     info = {
-        "se_alpha": float(np.sqrt(cov[-1, -1])),
+        "se_alpha": float(np.sqrt(cov[-2, -2])),
+        "se_spread": float(np.sqrt(cov[-1, -1])),
         "m": m,
         "ssr": ssr,
         "cond_A": float(np.linalg.cond(A)),
         "sigma2_gaussian": ssr / max(m - P, 1),
         "cov_gaussian": Ainv * (ssr / max(m - P, 1)),
     }
+
+    sd = np.sqrt(np.diag(cov))
+    info["corr_alpha_spread"] = float(cov[-2, -1] / (sd[-2] * sd[-1]))
+
     return cov, info
 
 
@@ -660,19 +693,24 @@ class BundleAdjustment:
 
     def solve(self):
         """
-        Builds and solves the bundle adjustment problem.
+        Build and solve the bundle adjustment problem.
 
         Returns:
-            Tuple[np.ndarray, np.ndarray, np.ndarray, float, pyceres.SolverSummary]:
-                Reflectivity array indexed by vertex_idx (zero for unobserved),
-                port beam pattern coefficients, starboard beam pattern
-                coefficients, absorption coeff, summary. Gains at any angle are
-                exp(chebyshev_basis(2 * theta / max_angle - 1, beam_degree) @ coefficients).
+            Tuple[np.ndarray, np.ndarray, np.ndarray, float, float,
+            pyceres.SolverSummary]:
+                Reflectivity indexed by vertex id (zero for unobserved and
+                flagged-unreliable vertices), port and starboard beam
+                coefficients (post-processed so that
+                c0_port + c0_stbd = 0 exactly), absorption coefficient in
+                dB/m (POWER convention: if the waterfall stores amplitude
+                samples, multiply by 2), fitted spreading exponent k (the
+                weights carry an r^-k factor; k = 0 is the old model), and
+                the solver summary.
         """
         problem = pyceres.Problem()
 
         # --- Phase 0: global parameter blocks ---
-        # One (degree + 1)-sized coefficient block per channel, plus alpha
+        # [beam_port (d+1), beam_stbd (d+1), alpha (1), spreading k (1)]
         beam_port_coeffs = np.zeros(self.beam_degree + 1, dtype=np.float64)
         beam_stbd_coeffs = np.zeros(self.beam_degree + 1, dtype=np.float64)
         problem.add_parameter_block(beam_port_coeffs, self.beam_degree + 1)
@@ -682,18 +720,24 @@ class BundleAdjustment:
         problem.add_parameter_block(alpha, 1)
         problem.set_parameter_lower_bound(alpha, 0, 0.0)
 
+        # Spreading exponent: W gains a factor r^-k. k = 0 reproduces the
+        # previous model exactly. k ~ 2 is what uncompensated two-way 1/r^2
+        # spreading looks like if the waterfall stores amplitude samples;
+        # k < 0 would mean the instrument's TVG over-compensates.
+        spreading = np.array([0.0], dtype=np.float64)
+        problem.add_parameter_block(spreading, 1)
+        problem.set_parameter_lower_bound(spreading, 0, -1.0)
+        problem.set_parameter_upper_bound(spreading, 0, 3.0)
+
         # Anchor the reflectivity <-> beam pattern scale gauge (c_0 = 0)
         problem.add_residual_block(
-            BeamPriorCost(self.beam_degree, self.gauge_weight), None, [beam_port_coeffs]
-        )
+            BeamPriorCost(self.beam_degree, self.gauge_weight),
+            None, [beam_port_coeffs])
         problem.add_residual_block(
-            BeamPriorCost(self.beam_degree, self.gauge_weight), None, [beam_stbd_coeffs]
-        )
+            BeamPriorCost(self.beam_degree, self.gauge_weight),
+            None, [beam_stbd_coeffs])
 
         # --- Phase A: reorder the observation arrays by vertex ---
-        # The sorted arrays replace the attributes in place so only one copy of
-        # each is ever alive; the permutation indexes are released as soon as
-        # they are consumed.
         order = np.argsort(self.obs_vertex, kind="stable")
         self.obs_vertex = self.obs_vertex[order]
         self.obs_intensity = self.obs_intensity[order]
@@ -707,9 +751,9 @@ class BundleAdjustment:
         gc.collect()
 
         if self.verbose:
-            print(f"Sorted observations by vertex")
+            print("Sorted observations by vertex")
 
-        # --- Phase B: group boundaries (obs_vertex is sorted: no re-sort copy) ---
+        # --- Phase B: group boundaries (obs_vertex is sorted) ---
         boundaries = np.flatnonzero(self.obs_vertex[1:] > self.obs_vertex[:-1]) + 1
         group_starts = np.concatenate((np.array([0], dtype=np.int64), boundaries))
         del boundaries
@@ -717,16 +761,15 @@ class BundleAdjustment:
         group_ends = np.append(group_starts[1:], self.obs_vertex.size)
         gc.collect()
 
-         # --- Phase C: build chunked per-observation residual blocks ---
-        # One pyceres cost per ~32k observations (a vertex is never split),
-        # amortizing the per-call Python overhead of 19M+ vertices down to
-        # a few thousand calls. Residuals are per OBSERVATION, so Huber
-        # acts on individual observation errors, and R_v* is clipped
-        # nonnegative (exact 1-D NNLS).
+        # --- Phase C: chunked per-observation residual blocks ---
+        # One cost per ~32k observations (a vertex is never split): Python
+        # call overhead drops from one call per vertex to a few thousand.
+        # Residuals are per OBSERVATION, so Huber acts on single
+        # observation errors; R_v* is clipped nonnegative (exact 1-D NNLS).
 
         chunks = build_chunks(group_starts, group_ends, CHUNK_TARGET_OBS)
-        huber = pyceres.HuberLoss(self.loss_delta)   # shared instance
-        n_port = n_stbd = 0
+        huber = pyceres.HuberLoss(self.loss_delta)  # shared; delta bounds a
+        n_port = n_stbd = 0                          # PER-OBSERVATION error
         for cs, ce, g0, g1 in chunks:
             ch_slice = self.obs_channel[cs:ce]
             port_present = bool(np.any(ch_slice == 0))
@@ -736,8 +779,8 @@ class BundleAdjustment:
 
             cost = VertexChunkCost(
                 cs, ce,
-                group_starts[g0:g1] - cs,                  # local group starts
-                group_ends[g0:g1] - group_starts[g0:g1],   # group lengths
+                group_starts[g0:g1] - cs,                    # local starts
+                group_ends[g0:g1] - group_starts[g0:g1],     # group lengths
                 self.obs_intensity,
                 self.obs_cos_incidence,
                 self.obs_depression_angle,
@@ -745,21 +788,21 @@ class BundleAdjustment:
                 self.obs_channel,
                 self.beam_degree,
                 port_present,
-                stbd_present
+                stbd_present,
             )
 
             blocks = ([beam_port_coeffs] if port_present else []) \
                      + ([beam_stbd_coeffs] if stbd_present else []) \
-                     + [alpha]
+                     + [alpha, spreading]
             problem.add_residual_block(cost, huber, blocks)
 
         gc.collect()
 
         if self.verbose:
-            print(f"Built problem: {vertex_ids.size} vertices in {len(chunks)} "
-                  f"chunk blocks ({n_port} chunks referencing port, "
-                  f"{n_stbd} starboard), degree {self.beam_degree}, "
-                  "per-observation residuals")
+            print(f"Built problem: {vertex_ids.size} vertices in "
+                  f"{len(chunks)} chunk blocks ({n_port} chunks referencing "
+                  f"port, {n_stbd} starboard), degree {self.beam_degree}, "
+                  f"per-observation residuals")
             log_vertex_diagnostics(self.obs_vertex,
                                    self.obs_depression_angle,
                                    group_starts,
@@ -767,20 +810,60 @@ class BundleAdjustment:
 
         # --- Phase D: solve ---
         options = pyceres.SolverOptions()
-        # Only 15 global parameters, no point/edge blocks: DENSE_QR is appropriate
         options.linear_solver_type = pyceres.LinearSolverType.DENSE_QR
         options.max_num_iterations = self.max_iterations
         options.num_threads = self.num_threads
         options.minimizer_progress_to_stdout = self.verbose
         options.function_tolerance = 1e-10
-        options.gradient_tolerance = 1e-6
-        options.parameter_tolerance = 1e-10
         options.initial_trust_region_radius = 10.0
 
         summary = pyceres.SolverSummary()
         pyceres.solve(options, problem, summary)
 
-        cov, info = estimate_parameter_covariance(
+        if self.verbose:
+            print(summary.BriefReport())
+            print("Solve finished")
+
+        # --- Phase E1: gauge post-processing (round 2) ---
+        # The data term is exactly flat along (R -> R*s, c0 -> c0 - ln s),
+        # so pin c0_port + c0_stbd = 0 by shifting both constant coefficients
+        # by delta. Extraction below then runs at the shifted pattern, so the
+        # returned reflectivity is consistent by construction: the R*G
+        # product is invariant, and no separate rescale is applied.
+        delta = -(beam_port_coeffs[0] + beam_stbd_coeffs[0]) / 2.0
+        if delta != 0.0:
+            beam_port_coeffs[0] += delta
+            beam_stbd_coeffs[0] += delta
+        if self.verbose:
+            print(f"Gauge post-processing: delta = {delta:+.6f} "
+                  f"(c0_port + c0_stbd = "
+                  f"{beam_port_coeffs[0] + beam_stbd_coeffs[0]:+.2e})")
+
+        # --- Phase E2: final reflectivity (vectorized, flagged) ---
+        # R_v* = max(0, sum I W / sum W^2) with W including the fitted
+        # r^-k factor. Near-zero-weight or low-correlation vertices are
+        # set to 0 and counted: this is the 3e8-max fix.
+        reflectivity, refl_stats = extract_reflectivity(
+            self.obs_intensity,
+            self.obs_cos_incidence,
+            self.obs_depression_angle,
+            self.obs_range,
+            self.obs_channel,
+            group_starts,
+            vertex_ids,
+            beam_port_coeffs,
+            beam_stbd_coeffs,
+            float(alpha[0]),
+            self.beam_degree,
+            float(spreading[0]),
+            verbose=self.verbose,
+        )
+
+        # --- Phase F: covariance (manual, int32-free) ---
+        # pyceres.Covariance overflows its int32 nonzero count at 138M
+        # per-observation rows and segfaults; the 22x22 normal equations
+        # are accumulated from the chunked Jacobians instead.
+        cov, cinfo = estimate_parameter_covariance(
             self.obs_intensity,
             self.obs_cos_incidence,
             self.obs_depression_angle,
@@ -794,52 +877,28 @@ class BundleAdjustment:
             self.beam_degree,
             self.loss_delta,
             self.gauge_weight,
-            chunk_target=CHUNK_TARGET_OBS,
+            float(spreading[0]),
         )
-        print(f"Covariance estimate: se_alpha={info['se_alpha']:.6f}, "
-              f"m={info['m']}, ssr={info['ssr']:.6f}, cond(A)={info['cond_A']:.3e}, "
-              f"sigma2_gaussian={info['sigma2_gaussian']:.6f}")
-
         if self.verbose:
-            print(summary.BriefReport())
-            print(f"Solve finished")
-
-        # --- Phase E: compute final reflectivity values (vectorized) ---
-        # R_v* = max(0, sum IW / sum W^2). Vertices whose weights are
-        # numerically ~0 (grazing angles, extreme range, fitted G ~ 0) or whose
-        # weight/intensity vectors are nearly uncorrelated get R = 0 and are
-        # counted in the verbose report: this is the 3e8-max fix.
-        reflectivity, refl_stats = extract_reflectivity(
-            self.obs_intensity,
-            self.obs_cos_incidence,
-            self.obs_depression_angle,
-            self.obs_range,
-            self.obs_channel,
-            group_starts,
-            vertex_ids,
-            beam_port_coeffs,
-            beam_stbd_coeffs,
-            float(alpha[0]),
-            self.beam_degree,
-            verbose=self.verbose,
-        )
+            print(f"Covariance estimate: "
+                  f"se_alpha={cinfo['se_alpha']:.6f}, "
+                  f"se_k={cinfo['se_spread']:.6f}, "
+                  f"corr(alpha,k)={cinfo['corr_alpha_spread']:+.4f}, "
+                  f"m={cinfo['m']}, cond(A)={cinfo['cond_A']:.3e}")
 
         # Release solver structures
-        del problem, group_starts, group_ends, vertex_ids
+        del problem, group_starts, group_ends, vertex_ids, chunks
         gc.collect()
 
-        if self.verbose:
-            print(f"Collected results")
-
-        # The beam pattern is its coefficient vector: gains at any angle are
-        # exp(chebyshev_basis(u, beam_degree) @ coefficients)
         beam_port = beam_port_coeffs.copy()
         beam_stbd = beam_stbd_coeffs.copy()
         absorption = float(alpha[0])
+        spread_exp = float(spreading[0])
 
-        delta = -0.5 * (beam_port[0] + beam_stbd[0])   # shift the MEAN c_0 to zero
-        beam_port[0] += delta
-        beam_stbd[0] += delta
-        reflectivity *= np.exp(-delta)                 # compensates G *= exp(delta)
+        if self.verbose:
+            print(f"Collected results: absorption={absorption:.6f}, spread_exp={spread_exp:.6f}\n"\
+                  f"Port coefficients={beam_port}\n"\
+                  f"Starboard coefficients={beam_stbd}\n")
 
-        return reflectivity, beam_port, beam_stbd, absorption, summary
+        return (reflectivity, beam_port, beam_stbd,
+                absorption, spread_exp, summary)

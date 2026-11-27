@@ -201,16 +201,15 @@ class Decomposition:
             verbose=cfg.get("verbose", True),
         )
 
-        reflectivity, beam_port, beam_stbd, absorption_coeff, summary = ba.solve()
-
-        print(f"Absorption Coeff: {absorption_coeff:.4f}\nPort Coeff: {beam_port}\nStbd Coeff: {beam_stbd}\n")
+        reflectivity, beam_port, beam_stbd, absorption, spread_exp, summary = ba.solve()
 
         np.savez_compressed(
             self.dataset.sonar_ba,
             reflectivity_vertices=reflectivity,
             beam_port=beam_port,
             beam_stbd=beam_stbd,
-            absorption_coeff=absorption_coeff,
+            absorption_coeff=absorption,
+            spread_exp=spread_exp
         )
 
         # Snapshot only the per-observation values needed to build the maps,
@@ -230,15 +229,6 @@ class Decomposition:
         del obs_values
         np.add.at(counts, (ba.obs_ping_idx, ba.obs_bin_idx), 1)
 
-        # Per-column propagation loss from the refined absorption coefficient
-        col_sums = np.bincount(ba.obs_bin_idx, weights=ba.obs_range, minlength=cols)
-        col_counts = np.bincount(ba.obs_bin_idx, minlength=cols)
-        prop_loss = np.ones(cols, dtype=np.float64)
-        observed_cols = col_counts > 0
-        col_slant = col_sums[observed_cols] / col_counts[observed_cols]
-        prop_loss[observed_cols] = 10.0 ** (-2.0 * absorption_coeff * col_slant / 10.0)
-        del col_sums, col_counts, col_slant, observed_cols
-
         # The bundle adjustment object (and its remaining observation arrays)
         # are no longer needed once the column statistics are computed
         del ba
@@ -253,9 +243,8 @@ class Decomposition:
         angles[~is_valid] = np.nan
 
         np.savez_compressed(self.dataset.sonar_angles, data=angles)
-        np.savez_compressed(self.dataset.sonar_loss, data=prop_loss)
         np.savez_compressed(self.dataset.sonar_reflectivity, data=reflectivity_map)
-        del angles, is_valid, reflectivity_map, prop_loss
+        del angles, is_valid, reflectivity_map
         gc.collect()
 
     def print_stats(self) -> None:
