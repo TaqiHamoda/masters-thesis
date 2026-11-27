@@ -175,7 +175,7 @@ class VertexChunkCost(pyceres.CostFunction):
             log_g = T @ port_c
         else:
             log_g = T @ stbd_c
-        G = np.exp(np.clip(log_g, -10.0, 10.0))
+        G = np.exp(np.clip(log_g, -15.0, 15.0))
         W = cos_t * np.exp(-ALPHA_JAC * alpha_val * r) * G  # (n,)
         W = W * np.exp(-k_val * np.log(r))   # r^-k; exactly 1 at k = 0
 
@@ -726,8 +726,8 @@ class BundleAdjustment:
         # k < 0 would mean the instrument's TVG over-compensates.
         spreading = np.array([0.0], dtype=np.float64)
         problem.add_parameter_block(spreading, 1)
-        problem.set_parameter_lower_bound(spreading, 0, -1.0)
-        problem.set_parameter_upper_bound(spreading, 0, 3.0)
+        problem.set_parameter_lower_bound(spreading, 0, 2.0)
+        problem.set_parameter_upper_bound(spreading, 0, 2.0)
 
         # Anchor the reflectivity <-> beam pattern scale gauge (c_0 = 0)
         problem.add_residual_block(
