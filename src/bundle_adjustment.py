@@ -726,8 +726,8 @@ class BundleAdjustment:
         # k < 0 would mean the instrument's TVG over-compensates.
         spreading = np.array([0.0], dtype=np.float64)
         problem.add_parameter_block(spreading, 1)
-        problem.set_parameter_lower_bound(spreading, 0, 2.0)
-        problem.set_parameter_upper_bound(spreading, 0, 2.0)
+        problem.set_parameter_lower_bound(spreading, 0, -1.0)
+        problem.set_parameter_upper_bound(spreading, 0, 5.0)
 
         # Anchor the reflectivity <-> beam pattern scale gauge (c_0 = 0)
         problem.add_residual_block(
